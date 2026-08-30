@@ -299,6 +299,7 @@ describe('packaged runtime resources', () => {
         await expect(
           readFile(join(resourcesDir, 'app.asar.unpacked', 'out', 'package.json'), 'utf8')
         ).resolves.toContain('"version": "9.9.9"')
+        await expect(readFile(join(resourcesDir, 'package-type'), 'utf8')).resolves.toBe('AppImage')
       } finally {
         await rm(root, { recursive: true, force: true })
       }

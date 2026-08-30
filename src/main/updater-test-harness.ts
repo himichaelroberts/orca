@@ -4,6 +4,7 @@ import { clearTrackedRealTimers, trackRealTimers } from './updater-test-timer-tr
 
 /** Loose spy signature for the electron/electron-updater calls the suites only assert on. */
 type UpdaterSpy = Mock<(...args: unknown[]) => unknown>
+type LinuxPackageType = 'deb' | 'rpm' | 'non-root' | 'unusable'
 
 type AutoUpdaterMock = {
   autoDownload: boolean
@@ -44,7 +45,11 @@ type UpdaterModuleFactories = {
   electronUpdaterLoader: () => { loadElectronAutoUpdater: () => AutoUpdaterMock }
   electronToolkitUtils: () => { is: { dev: boolean } }
   ipcPty: () => { killAllPty: UpdaterSpy }
-  linuxUpdatePackageType: () => { getLinuxRootPackageType: Mock<() => 'deb' | 'rpm' | null> }
+  linuxUpdatePackageType: () => {
+    getLinuxPackageType: Mock<() => LinuxPackageType>
+    getLinuxRootPackageType: Mock<() => 'deb' | 'rpm' | null>
+    LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE: string
+  }
   updaterLifecycleDiagnostics: () => { recordUpdaterLifecycle: UpdaterSpy }
   updaterChangelog: () => { fetchChangelog: UpdaterSpy }
   updaterNudge: () => { fetchNudge: UpdaterSpy; shouldApplyNudge: UpdaterSpy }
@@ -68,6 +73,7 @@ export type UpdaterMocks = {
   isMock: { dev: boolean }
   killAllPtyMock: UpdaterSpy
   powerMonitorOnMock: UpdaterSpy
+  getLinuxPackageTypeMock: Mock<() => LinuxPackageType>
   getLinuxRootPackageTypeMock: Mock<() => 'deb' | 'rpm' | null>
   recordUpdaterLifecycleMock: UpdaterSpy
   fetchChangelogMock: UpdaterSpy
@@ -206,6 +212,9 @@ export function createUpdaterMocks(): UpdaterMocks {
   const killAllPtyMock = vi.fn()
   const powerMonitorOnMock = vi.fn()
   const getLinuxRootPackageTypeMock = vi.fn<() => 'deb' | 'rpm' | null>(() => null)
+  const getLinuxPackageTypeMock = vi.fn<() => LinuxPackageType>(() => {
+    return getLinuxRootPackageTypeMock() ?? 'non-root'
+  })
   const recordUpdaterLifecycleMock = vi.fn()
   const fetchChangelogMock = vi.fn()
   const fetchNudgeMock = vi.fn()
@@ -232,7 +241,12 @@ export function createUpdaterMocks(): UpdaterMocks {
     electronToolkitUtils: () => ({ is: isMock }),
     ipcPty: () => ({ killAllPty: killAllPtyMock }),
     // Why: only the marker resolver is faked so the real artifact capture/redaction path stays under test.
-    linuxUpdatePackageType: () => ({ getLinuxRootPackageType: getLinuxRootPackageTypeMock }),
+    linuxUpdatePackageType: () => ({
+      getLinuxPackageType: getLinuxPackageTypeMock,
+      getLinuxRootPackageType: getLinuxRootPackageTypeMock,
+      LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE:
+        'Orca could not verify the installed Linux package format, so it will not install this update automatically. Download the update from the official release page and install it manually.'
+    }),
     updaterLifecycleDiagnostics: () => ({ recordUpdaterLifecycle: recordUpdaterLifecycleMock }),
     updaterChangelog: () => ({ fetchChangelog: fetchChangelogMock }),
     updaterNudge: () => ({ fetchNudge: fetchNudgeMock, shouldApplyNudge: shouldApplyNudgeMock }),
@@ -276,6 +290,9 @@ export function createUpdaterMocks(): UpdaterMocks {
     disarmExitWatchdogMock.mockReset()
     powerMonitorOnMock.mockReset()
     getLinuxRootPackageTypeMock.mockReset().mockReturnValue(null)
+    getLinuxPackageTypeMock.mockReset().mockImplementation(() => {
+      return getLinuxRootPackageTypeMock() ?? 'non-root'
+    })
     recordUpdaterLifecycleMock.mockReset()
     fetchNudgeMock.mockReset().mockResolvedValue(null)
     shouldApplyNudgeMock.mockReset().mockReturnValue(false)
@@ -306,6 +323,7 @@ export function createUpdaterMocks(): UpdaterMocks {
     isMock,
     killAllPtyMock,
     powerMonitorOnMock,
+    getLinuxPackageTypeMock,
     getLinuxRootPackageTypeMock,
     recordUpdaterLifecycleMock,
     fetchChangelogMock,
