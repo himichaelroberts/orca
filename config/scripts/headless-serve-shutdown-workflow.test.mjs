@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 const workflow = parse(readFileSync('.github/workflows/pr.yml', 'utf8'))
 const headlessLinuxGuide = readFileSync('docs/reference/headless-linux-server.md', 'utf8')
+<<<<<<< HEAD
 const signalCase = readFileSync('config/docker/headless-serve-shutdown/run-signal-case.sh', 'utf8')
 const shutdownDockerRunner = readFileSync(
   'config/scripts/run-headless-serve-shutdown-docker.mjs',
@@ -15,6 +16,11 @@ const desktopStartupOracle = readFileSync(
   'config/docker/headless-serve-shutdown/run-appimage-desktop-startup-case.sh',
   'utf8'
 )
+const headlessLinuxProse = headlessLinuxGuide.replace(/\s+/g, ' ')
+||||||| parent of e24fc472f7f (docs(linux): document orcad update restart safety)
+=======
+const headlessLinuxProse = headlessLinuxGuide.replace(/\s+/g, ' ')
+>>>>>>> e24fc472f7f (docs(linux): document orcad update restart safety)
 
 function readSystemdUnitBlocks(doc, unitName) {
   const escapedUnitName = unitName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -168,5 +174,31 @@ describe('headless serve shutdown PR gate', () => {
     expect(ownedXvfbUnits[0]).toMatch(/^KillMode=mixed$/m)
     expect(managedXvfbUnits).toHaveLength(1)
     expect(managedXvfbUnits[0]).not.toMatch(/^KillMode=/m)
+  })
+
+  it('distinguishes persisted state from live work during a service restart', () => {
+    expect(headlessLinuxProse).toContain(
+      'Every `systemctl stop` or `restart` therefore ends live terminals and agent processes'
+    )
+    expect(headlessLinuxProse).toContain(
+      'These guarantees do not preserve live processes. The service restart kills every terminal and agent in its cgroup'
+    )
+    expect(headlessLinuxProse).toContain(
+      'Proceed only when it is untruncated, has an explicit `hostScope` covering every expected execution host, has no `omittedHostIds`, and lists no terminals'
+    )
+    expect(headlessLinuxGuide).not.toContain('Two facts make this safe and predictable')
+  })
+
+  it('uses the registered CLI name from ordinary Linux shells', () => {
+    const commandRule =
+      'The registered Linux CLI command is `orca-ide`, not `orca`, to avoid shadowing the GNOME Orca screen reader.'
+    const substitutionRule =
+      "Bare `orca` is available only through Orca's terminal-scoped shim; from an ordinary shell, substitute `orca-ide` for `orca` in commands below."
+
+    expect(headlessLinuxProse).toContain(commandRule)
+    expect(headlessLinuxProse).toContain(substitutionRule)
+    expect(headlessLinuxProse.indexOf(substitutionRule)).toBeLessThan(
+      headlessLinuxProse.indexOf('`orca terminal list --json`')
+    )
   })
 })

@@ -233,6 +233,10 @@ clients should use.
 `KillMode=mixed` sends the graceful stop signal only to Orca's main process,
 then retains systemd's cgroup-wide `SIGKILL` fallback if shutdown times out.
 This lets Orca keep its owned Xvfb alive until Electron disconnects cleanly.
+It does **not** preserve the detached terminal daemon: the daemon and its PTYs
+remain in `orca-serve.service`'s cgroup and are killed when the stop completes.
+Every `systemctl stop` or `restart` therefore ends live terminals and agent
+processes, even though their persisted layout and terminal history remain.
 
 Exit status `3` means another process already owns this userData profile, so
 `RestartPreventExitStatus=3` stops the unit instead of retrying a launch that
@@ -328,6 +332,11 @@ sudo systemctl enable --now orca-xvfb.service orca-serve.service
 
 ## CLI Install Note
 
+The registered Linux CLI command is `orca-ide`, not `orca`, to avoid shadowing
+the GNOME Orca screen reader. Bare `orca` is available only through Orca's
+terminal-scoped shim; from an ordinary shell, substitute `orca-ide` for `orca`
+in commands below.
+
 On a headless host, you do not need to open the desktop UI just to run the
 server. Invoke the AppImage directly:
 
@@ -380,7 +389,7 @@ at all — the built-in updater only runs in the desktop GUI, and no paired mobi
 or web client can trigger it remotely. Upgrading is always a deliberate step:
 replace the AppImage and restart the service.
 
-Two facts make this safe and predictable:
+Two facts make the persisted-state transition predictable:
 
 - **State lives in the service user's home, not next to the binary.** Persisted
   data is under `/home/orca/.config/` (Orca uses both an `orca` and an `Orca`
@@ -391,6 +400,18 @@ Two facts make this safe and predictable:
 - **New builds migrate old state on load.** Orca loads older `orca-data.json`
   state into the current schema and writes it back in the current shape, so a
   forward upgrade needs no manual data step.
+
+These guarantees do not preserve live processes. The service restart kills
+every terminal and agent in its cgroup; an agent conversation may be resumable,
+but its current process and any in-flight command are gone.
+
+Immediately before stopping the service, obtain a fresh
+`orca terminal list --json` result for this environment. Proceed only when it is
+untruncated, has an explicit `hostScope` covering every expected execution host,
+has no `omittedHostIds`, and lists no terminals. A missing scope, omitted host,
+failed request or lost connection is `unverifiable`, so defer the restart. Do
+not allow new work between that census and the stop; Orca does not yet provide
+an atomic census-and-stop fence.
 
 Rolling back is the case that needs care — see [Roll back](#roll-back).
 
