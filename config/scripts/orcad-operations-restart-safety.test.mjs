@@ -21,10 +21,13 @@ describe('orcad operations restart safety', () => {
 
   it('fails closed before cgroup-wide maintenance', () => {
     expect(operationsProse).toContain(
-      'A safe empty census is untruncated, has an explicit `hostScope`, covers every expected execution host, has no `omittedHostIds`, and lists no terminals'
+      'A safe empty census is untruncated, has an explicit `hostScope`, covers every execution host affected by the stop, and lists no terminals on those hosts'
     )
     expect(operationsProse).toContain(
-      'Missing scope, truncation, an omitted host, a failed request or lost contact makes the result `unverifiable`'
+      "Every `omittedHostIds` entry must be explicitly accounted for outside the target service's execution boundary"
+    )
+    expect(operationsProse).toContain(
+      'A separately paired runtime is outside that boundary; local execution and SSH hosts reached through this runtime are not. An affected or unknown omission, missing scope, truncation, a failed request or lost contact makes the result `unverifiable`'
     )
     expect(operationsProse).toContain('Orca does not yet provide an atomic census-and-stop fence')
   })

@@ -405,13 +405,16 @@ These guarantees do not preserve live processes. The service restart kills
 every terminal and agent in its cgroup; an agent conversation may be resumable,
 but its current process and any in-flight command are gone.
 
-Immediately before stopping the service, obtain a fresh
-`orca terminal list --json` result for this environment. Proceed only when it is
-untruncated, has an explicit `hostScope` covering every expected execution host,
-has no `omittedHostIds`, and lists no terminals. A missing scope, omitted host,
-failed request or lost connection is `unverifiable`, so defer the restart. Do
-not allow new work between that census and the stop; Orca does not yet provide
-an atomic census-and-stop fence.
+Immediately before stopping the service, obtain a fresh census as the service's
+OS account and home: `sudo -Hu orca orca-ide terminal list --json`. Proceed only when it is
+untruncated, has an explicit `hostScope`, covers every execution host affected
+by this service stop, and lists no terminals on those hosts. Every
+`omittedHostIds` entry must be explicitly accounted for outside this service's
+execution boundary. A separately paired runtime is outside that boundary; local
+execution and SSH hosts reached through this runtime are not. An affected or
+unknown omission, missing scope, failed request or lost connection is
+`unverifiable`, so defer the restart. Do not allow new work between that census
+and the stop; Orca does not yet provide an atomic census-and-stop fence.
 
 Rolling back is the case that needs care — see [Roll back](#roll-back).
 
