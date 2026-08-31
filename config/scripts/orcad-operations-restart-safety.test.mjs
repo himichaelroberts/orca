@@ -27,6 +27,10 @@ describe('orcad operations restart safety', () => {
       "Every `omittedHostIds` entry must be explicitly accounted for outside the target service's execution boundary"
     )
     expect(operationsProse).toContain(
+      '`sudo -Hu orca /home/orca/.local/bin/orca-ide terminal list --json`'
+    )
+    expect(operationsGuide).not.toContain('sudo -Hu orca orca-ide terminal list --json')
+    expect(operationsProse).toContain(
       'A separately paired runtime is outside that boundary; local execution and SSH hosts reached through this runtime are not. An affected or unknown omission, missing scope, truncation, a failed request or lost contact makes the result `unverifiable`'
     )
     expect(operationsProse).toContain('Orca does not yet provide an atomic census-and-stop fence')

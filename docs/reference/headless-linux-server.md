@@ -333,9 +333,12 @@ sudo systemctl enable --now orca-xvfb.service orca-serve.service
 ## CLI Install Note
 
 The registered Linux CLI command is `orca-ide`, not `orca`, to avoid shadowing
-the GNOME Orca screen reader. Bare `orca` is available only through Orca's
-terminal-scoped shim; from an ordinary shell, substitute `orca-ide` for `orca`
-in commands below.
+the GNOME Orca screen reader. Desktop-managed terminals receive a
+terminal-scoped bare-`orca` shim. A packaged headless `orca serve` also makes a
+best-effort dispatcher at `$HOME/.local/bin/orca` for the service user's own
+shell, so the Claude Teams launcher can resolve its bare command; it does not
+replace another user's `orca`. From an ordinary shell outside that service
+user's managed environment, substitute `orca-ide` for `orca` in commands below.
 
 On a headless host, you do not need to open the desktop UI just to run the
 server. Invoke the AppImage directly:
@@ -406,7 +409,12 @@ every terminal and agent in its cgroup; an agent conversation may be resumable,
 but its current process and any in-flight command are gone.
 
 Immediately before stopping the service, obtain a fresh census as the service's
-OS account and home: `sudo -Hu orca orca-ide terminal list --json`. Proceed only when it is
+OS account and home. Use the installer's absolute launcher path so `sudo`'s
+`secure_path` cannot hide a per-user registration:
+`sudo -Hu orca /home/orca/.local/bin/orca-ide terminal list --json`.
+Replace both `orca` and `/home/orca` with the service account and home used by
+your unit; for an extracted deployment, use its absolute `resources/bin/orca-ide`
+launcher instead. Proceed only when the result is
 untruncated, has an explicit `hostScope`, covers every execution host affected
 by this service stop, and lists no terminals on those hosts. Every
 `omittedHostIds` entry must be explicitly accounted for outside this service's

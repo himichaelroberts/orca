@@ -85,8 +85,11 @@ pinned while it owns sessions. A combined-unit systemd stop or restart is differ
 the daemon and every live terminal after the graceful window.
 
 Before a cgroup-wide stop, obtain a fresh `orca-ide terminal list --json` result using the same OS
-account and home as the daemon (for example, `sudo -Hu orca orca-ide terminal list --json`). A safe
-empty census is untruncated, has an explicit `hostScope`, covers every
+account and home as the daemon. Invoke the installer's absolute launcher path so `sudo`'s
+`secure_path` cannot hide a per-user registration (for example,
+`sudo -Hu orca /home/orca/.local/bin/orca-ide terminal list --json`). Replace both `orca` and
+`/home/orca` with the service account and home used by the unit; an extracted deployment may use
+its absolute `resources/bin/orca-ide` launcher instead. A safe empty census is untruncated, has an explicit `hostScope`, covers every
 execution host affected by the stop, and lists no terminals on those hosts. Every
 `omittedHostIds` entry must be explicitly accounted for outside the target service's execution
 boundary. A separately paired runtime is outside that boundary; local execution and SSH hosts

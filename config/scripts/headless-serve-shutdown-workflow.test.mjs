@@ -181,7 +181,10 @@ describe('headless serve shutdown PR gate', () => {
     expect(headlessLinuxProse).toContain(
       'A separately paired runtime is outside that boundary; local execution and SSH hosts reached through this runtime are not. An affected or unknown omission, missing scope, failed request or lost connection is `unverifiable`'
     )
-    expect(headlessLinuxGuide).toContain('sudo -Hu orca orca-ide terminal list --json')
+    expect(headlessLinuxGuide).toContain(
+      'sudo -Hu orca /home/orca/.local/bin/orca-ide terminal list --json'
+    )
+    expect(headlessLinuxGuide).not.toContain('sudo -Hu orca orca-ide terminal list --json')
     expect(headlessLinuxGuide).not.toContain('Two facts make this safe and predictable')
   })
 
@@ -189,12 +192,13 @@ describe('headless serve shutdown PR gate', () => {
     const commandRule =
       'The registered Linux CLI command is `orca-ide`, not `orca`, to avoid shadowing the GNOME Orca screen reader.'
     const substitutionRule =
-      "Bare `orca` is available only through Orca's terminal-scoped shim; from an ordinary shell, substitute `orca-ide` for `orca` in commands below."
-    const censusCommand = '`sudo -Hu orca orca-ide terminal list --json`'
+      "From an ordinary shell outside that service user's managed environment, substitute `orca-ide` for `orca` in commands below."
+    const censusCommand = '`sudo -Hu orca /home/orca/.local/bin/orca-ide terminal list --json`'
 
     expect(headlessLinuxProse).toContain(commandRule)
     expect(headlessLinuxProse).toContain(substitutionRule)
     expect(headlessLinuxProse).toContain(censusCommand)
+    expect(headlessLinuxGuide).toContain('best-effort dispatcher at `$HOME/.local/bin/orca`')
     expect(headlessLinuxProse.indexOf(substitutionRule)).toBeLessThan(
       headlessLinuxProse.indexOf(censusCommand)
     )
