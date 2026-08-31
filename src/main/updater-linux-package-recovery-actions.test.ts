@@ -318,10 +318,11 @@ describe('linux package recovery actions', () => {
     const pending = updater.getLinuxPackageInstallInstructions()
     getTrackedLinuxPackageArtifactMock.mockReturnValue({ ...ARTIFACT })
     await activateRecovery(updater)
+    const statusesBefore = errorStatuses(send).length
     settleValidation({ ok: true, command: 'stale command', packageFileName: 'stale.deb' })
 
     await expect(pending).rejects.toThrow('Package install recovery is no longer current.')
-    expect(errorStatuses(send)).toHaveLength(2)
+    expect(errorStatuses(send)).toHaveLength(statusesBefore)
   })
 
   it('does not reveal a stale path after a same-version recapture', async () => {
