@@ -80,9 +80,7 @@ vi.mock('./updater-lifecycle-diagnostics', () => ({
 }))
 vi.mock('./linux-update-package-type', () => ({
   getLinuxPackageType: () => 'deb',
-  getLinuxRootPackageType: () => 'deb',
-  LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE:
-    'Orca could not verify the installed Linux package format, so it will not install this update automatically. Download the update from the official release page and install it manually.'
+  getLinuxRootPackageType: () => 'deb'
 }))
 vi.mock('./linux-package-update-recovery', () => ({
   captureLinuxPackageArtifact: vi.fn(() => getTrackedLinuxPackageArtifactMock()),

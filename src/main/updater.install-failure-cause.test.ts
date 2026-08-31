@@ -102,9 +102,7 @@ vi.mock('./updater-lifecycle-diagnostics', () => ({
 }))
 vi.mock('./linux-update-package-type', () => ({
   getLinuxPackageType: () => 'non-root',
-  getLinuxRootPackageType: () => null,
-  LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE:
-    'Orca could not verify the installed Linux package format, so it will not install this update automatically. Download the update from the official release page and install it manually.'
+  getLinuxRootPackageType: () => null
 }))
 
 // The real electron-updater DebUpdater failure text when elevation is impossible.

@@ -8,9 +8,6 @@ export type { LinuxRootPackageType }
 /** The packaged Linux format that controls how updates may be installed. */
 export type LinuxPackageType = LinuxRootPackageType | 'non-root' | 'unusable'
 
-export const LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE =
-  'Orca could not verify the installed Linux package format, so it will not install this update automatically. Download the update from the official release page and install it manually.'
-
 // Why: `undefined` means "not resolved yet"; every other value is stable for this process.
 let cachedPackageType: LinuxPackageType | undefined
 

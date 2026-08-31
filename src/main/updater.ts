@@ -35,11 +35,11 @@ import {
 } from './update-install-exit-watchdog'
 import { registerAutoUpdaterHandlers } from './updater-events'
 import { recordUpdaterLifecycle } from './updater-lifecycle-diagnostics'
+import { getLinuxPackageType } from './linux-update-package-type'
 import {
-  getLinuxPackageType,
+  getRetainedLinuxPackageManualInstallStatus,
   LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE
-} from './linux-update-package-type'
-import { getRetainedLinuxPackageManualInstallStatus } from './linux-package-downloaded-status'
+} from './linux-package-downloaded-status'
 import {
   createUpdaterDiagnosticLogger,
   redactLinuxPackageInstallText

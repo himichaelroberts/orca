@@ -48,7 +48,6 @@ type UpdaterModuleFactories = {
   linuxUpdatePackageType: () => {
     getLinuxPackageType: Mock<() => LinuxPackageType>
     getLinuxRootPackageType: Mock<() => 'deb' | 'rpm' | null>
-    LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE: string
   }
   updaterLifecycleDiagnostics: () => { recordUpdaterLifecycle: UpdaterSpy }
   updaterChangelog: () => { fetchChangelog: UpdaterSpy }
@@ -243,9 +242,7 @@ export function createUpdaterMocks(): UpdaterMocks {
     // Why: only the marker resolver is faked so the real artifact capture/redaction path stays under test.
     linuxUpdatePackageType: () => ({
       getLinuxPackageType: getLinuxPackageTypeMock,
-      getLinuxRootPackageType: getLinuxRootPackageTypeMock,
-      LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE:
-        'Orca could not verify the installed Linux package format, so it will not install this update automatically. Download the update from the official release page and install it manually.'
+      getLinuxRootPackageType: getLinuxRootPackageTypeMock
     }),
     updaterLifecycleDiagnostics: () => ({ recordUpdaterLifecycle: recordUpdaterLifecycleMock }),
     updaterChangelog: () => ({ fetchChangelog: fetchChangelogMock }),

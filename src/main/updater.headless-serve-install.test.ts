@@ -78,9 +78,7 @@ vi.mock('electron-updater', () => ({ autoUpdater: autoUpdaterMock }))
 vi.mock('./electron-updater-loader', () => ({ loadElectronAutoUpdater: () => autoUpdaterMock }))
 vi.mock('./linux-update-package-type', () => ({
   getLinuxPackageType: () => 'non-root',
-  getLinuxRootPackageType: () => null,
-  LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE:
-    'Orca could not verify the installed Linux package format, so it will not install this update automatically. Download the update from the official release page and install it manually.'
+  getLinuxRootPackageType: () => null
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 vi.mock('./ipc/pty', () => ({ killAllPty: killAllPtyMock }))

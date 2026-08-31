@@ -4,12 +4,11 @@ import {
   clearTrackedLinuxPackageArtifact,
   getTrackedLinuxPackageArtifact
 } from './linux-package-update-recovery'
-import {
-  getLinuxPackageType,
-  LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE
-} from './linux-update-package-type'
+import { getLinuxPackageType } from './linux-update-package-type'
 import type { LinuxPackageArtifact } from './linux-package-update-recovery'
 
+export const LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE =
+  'Orca could not verify the installed Linux package format, so it will not install this update automatically. Download the update from the official release page and install it manually.'
 export const LINUX_PACKAGE_MANUAL_INSTALL_MESSAGE =
   'Quit Orca before running the system package install command.'
 const PACKAGE_METADATA_UNUSABLE_MESSAGE =
