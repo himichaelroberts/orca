@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { UpdateStatus } from '../shared/update-status-types'
 import type { registerAutoUpdaterHandlers } from './updater-events'
 
 const { appMock, nativeUpdaterMock, getLinuxPackageTypeMock, getLinuxRootPackageTypeMock } =
@@ -391,13 +392,28 @@ describe('registerAutoUpdaterHandlers linux package artifact tracking', () => {
     expect(getArtifact()).toBeNull()
   })
 
-  it('keeps the artifact through a same-version recheck', async () => {
-    const { emit, getArtifact } = await register()
+  it('keeps manual-install recovery through a same-version recheck', async () => {
+    let status: UpdateStatus = { state: 'downloading', percent: 100, version: '1.0.61' }
+    const { emit, context, getArtifact } = await register({
+      getCurrentStatus: vi.fn(() => status)
+    })
     emit('update-downloaded', downloadedEvent())
 
+    status = { state: 'checking' }
     emit('update-available', { version: '1.0.61' })
-    emit('download-progress', { percent: 100 })
 
     expect(getArtifact()).toEqual(expect.objectContaining({ version: '1.0.61', path: DEB_PATH }))
+    await vi.waitFor(() =>
+      expect(context.sendStatus).toHaveBeenLastCalledWith({
+        state: 'error',
+        message: 'Quit Orca before running the system package install command.',
+        recovery: {
+          kind: 'linux-package-install',
+          packageType: 'deb',
+          reason: 'manual-install-required',
+          version: '1.0.61'
+        }
+      })
+    )
   })
 })

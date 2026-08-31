@@ -198,7 +198,13 @@ export function registerAutoUpdaterHandlers({
           }
         }
 
-        sendStatus({ state: 'available', version: info.version, changelog })
+        sendStatus(
+          getRetainedLinuxPackageManualInstallStatus() ?? {
+            state: 'available',
+            version: info.version,
+            changelog
+          }
+        )
       } finally {
         clearUpdateAvailableEventPending(attemptId)
       }

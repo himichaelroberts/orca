@@ -78,6 +78,7 @@ describe('headless serve shutdown PR gate', () => {
     expect(appImageShutdownStep.run).toContain('--signal-target serving-electron')
     expect(appImageShutdownStep.run).toContain('--int-delivery pid')
     expect(steps.indexOf(shutdownStep)).toBeGreaterThan(steps.indexOf(packageStep))
+    expect(steps.indexOf(shutdownStep)).toBeGreaterThan(steps.indexOf(markerStep))
     expect(steps.indexOf(launcherShutdownStep)).toBeGreaterThan(steps.indexOf(shutdownStep))
     expect(steps.indexOf(appImageShutdownStep)).toBeGreaterThan(steps.indexOf(launcherShutdownStep))
   })
@@ -155,7 +156,6 @@ describe('headless serve shutdown PR gate', () => {
 
   it('gives the original AppImage enough bounded extraction space', () => {
     expect(shutdownDockerRunner).toContain("'/tmp:rw,nosuid,nodev,exec,size=1g'")
-    expect(steps.indexOf(shutdownStep)).toBeGreaterThan(steps.indexOf(markerStep))
   })
 
   it('keeps owned Xvfb alive during the documented systemd graceful stop', () => {
