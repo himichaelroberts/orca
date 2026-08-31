@@ -105,6 +105,29 @@ const winSpeechNativeResource = {
   from: 'node_modules/sherpa-onnx-win-x64',
   to: 'node_modules/sherpa-onnx-win-x64'
 }
+// electron-builder replaces these defaults when `depends` is configured; retain
+// Electron's loader requirements alongside Orca's headless-host dependencies.
+const debElectronRuntimeDependencies = [
+  'libgtk-3-0',
+  'libnotify4',
+  'libnss3',
+  'libxss1',
+  'libxtst6',
+  'xdg-utils',
+  'libatspi2.0-0',
+  'libuuid1',
+  'libsecret-1-0'
+]
+const rpmElectronRuntimeDependencies = [
+  'gtk3',
+  'libnotify',
+  'nss',
+  'libXScrnSaver',
+  '(libXtst or libXtst6)',
+  'xdg-utils',
+  'at-spi2-core',
+  '(libuuid or libuuid1)'
+]
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
@@ -255,6 +278,10 @@ module.exports = {
         : join(context.appOutDir, 'resources')
     if (!existsSync(resourcesDir)) {
       throw new Error(`Missing packaged resources directory: ${resourcesDir}`)
+    }
+    // FpmTarget replaces this with deb/rpm while building those artifacts from the shared app tree.
+    if (context.electronPlatformName === 'linux') {
+      writeFileSync(join(resourcesDir, 'package-type'), 'AppImage')
     }
     if (context.electronPlatformName === 'darwin') {
       const architectureByEnum = { 1: 'x64', 3: 'arm64' }
@@ -522,6 +549,7 @@ module.exports = {
     // Linux host — Chromium needs a display server even for offscreen rendering,
     // and serve starts Xvfb itself when present (see ensure-virtual-display.ts).
     depends: [
+      ...debElectronRuntimeDependencies,
       'python3',
       'python3-gi',
       'gir1.2-atspi-2.0',
@@ -543,9 +571,9 @@ module.exports = {
     // Why: see deb depends. RPM distros ship Xvfb as xorg-x11-server-Xvfb (there
     // is no `xvfb` package), so the name differs from the deb here.
     depends: [
+      ...rpmElectronRuntimeDependencies,
       'python3',
       'python3-gobject',
-      'at-spi2-core',
       'xdotool',
       'xclip',
       'xorg-x11-server-Xvfb'

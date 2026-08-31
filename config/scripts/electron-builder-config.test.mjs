@@ -10,6 +10,7 @@ const SRC_MAIN_DIR = join(REPO_ROOT, 'src', 'main')
 const require = createRequire(import.meta.url)
 const electronBuilderConfig = require('../electron-builder.config.cjs')
 const { FileMatcher } = require('app-builder-lib/out/fileMatcher')
+const FpmTarget = require('app-builder-lib/out/targets/FpmTarget').default
 const electronBuilderNativeRebuild = require('./electron-builder-native-rebuild.cjs')
 
 describe('electron-builder config', () => {
@@ -281,6 +282,16 @@ describe('electron-builder config', () => {
     })
   })
 
+  it('retains electron-builder runtime dependencies in deb and rpm packages', () => {
+    for (const target of ['deb', 'rpm']) {
+      const dependencies = electronBuilderConfig[target].depends
+      expect(dependencies).toEqual(
+        expect.arrayContaining(FpmTarget.prototype.getDefaultDepends(target))
+      )
+      expect(new Set(dependencies).size).toBe(dependencies.length)
+    }
+  })
+
   it('validates each AppImage before electron-builder publishes it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'orca-electron-builder-appimage-'))
     try {
@@ -406,6 +417,18 @@ describe('electron-builder config', () => {
       )
       for (const target of linuxTargets.filter((entry) => RECOVERABLE_TARGETS.has(entry))) {
         expect(source).toContain(`value === '${target}'`)
+      }
+    })
+
+    it('keeps the pinned FpmTarget overwrite for configured deb and rpm artifacts', async () => {
+      const source = await readFile(
+        require.resolve('app-builder-lib/out/targets/FpmTarget'),
+        'utf8'
+      )
+
+      expect(source).toContain('path.join(resourceDir, "package-type"), target')
+      for (const target of RECOVERABLE_TARGETS) {
+        expect(electronBuilderConfig[target]).toBeDefined()
       }
     })
   })
