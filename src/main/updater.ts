@@ -39,6 +39,7 @@ import {
   getLinuxPackageType,
   LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE
 } from './linux-update-package-type'
+import { getRetainedLinuxPackageManualInstallStatus } from './linux-package-downloaded-status'
 import {
   createUpdaterDiagnosticLogger,
   redactLinuxPackageInstallText
@@ -354,6 +355,17 @@ function sendStatus(status: UpdateStatus, options?: { force?: boolean }): void {
   mainWindowRef?.webContents.send('updater:status', decoratedStatus)
 }
 
+function sendSettledCheckStatus(status: UpdateStatus): void {
+  const retainedStatus = getRetainedLinuxPackageManualInstallStatus()
+  if (retainedStatus) {
+    sendStatus(retainedStatus)
+  } else if (status.state === 'error') {
+    sendErrorStatus(status.message, status.userInitiated)
+  } else {
+    sendStatus(status)
+  }
+}
+
 function getOptionsForUpdateCheckVariant(variant: UpdateCheckVariant): UpdateCheckOptions {
   switch (variant) {
     case 'perf':
@@ -571,7 +583,7 @@ function settleSilentUpdateCheck(attemptId: number, userInitiated: boolean | und
           deferPendingUpdateNudgeUntilRetry()
           return
         }
-        sendStatus({ state: 'not-available', userInitiated })
+        sendSettledCheckStatus({ state: 'not-available', userInitiated })
       }
     }
     return
@@ -581,7 +593,7 @@ function settleSilentUpdateCheck(attemptId: number, userInitiated: boolean | und
   backgroundCheckPromotedToUserInitiated = false
   userInitiatedCheck = false
   completeSilentUpdateCheck(userInitiated)
-  sendStatus({ state: 'not-available', userInitiated })
+  sendSettledCheckStatus({ state: 'not-available', userInitiated })
 }
 
 function handleSettledUpdateCheckPromise(attemptId: number): void {
@@ -994,7 +1006,7 @@ async function sendCheckFailureStatus(
     // error, or the pin blocks background checks for the process lifetime.
     clearAvailableUpdateContext()
     restoreReleaseUpdateSource()
-    sendStatus({ state: 'error', message, userInitiated })
+    sendSettledCheckStatus({ state: 'error', message, userInitiated })
     return
   }
   const failureKey = getCheckFailureKey(message, userInitiated)
@@ -1039,18 +1051,19 @@ async function sendCheckFailureStatus(
       scheduleAutomaticUpdateCheck(AUTO_UPDATE_RETRY_INTERVAL_MS)
       if (userInitiated) {
         // Why: a user click needs visible feedback (idle looks broken); distinguish incomplete releases from transport failures.
-        sendErrorStatus(
-          isStableReleaseNotReadyFailure(sourceError)
+        sendSettledCheckStatus({
+          state: 'error',
+          message: isStableReleaseNotReadyFailure(sourceError)
             ? "A newer release isn't available for this device yet. Check again later."
             : "Couldn't reach the update server. Try again in a few minutes.",
-          true
-        )
+          userInitiated: true
+        })
       } else {
         if (isRetryableReleaseFeedPreflightFailure(sourceError)) {
           // Why: release probes can fail transiently; keep the campaign pending so the short retry can still show it.
           deferPendingUpdateNudgeUntilRetry()
         }
-        sendStatus({ state: 'idle' })
+        sendSettledCheckStatus({ state: 'idle' })
       }
       return
     }
@@ -1060,7 +1073,7 @@ async function sendCheckFailureStatus(
     if (!userInitiated) {
       scheduleAutomaticUpdateCheck(AUTO_UPDATE_RETRY_INTERVAL_MS)
     }
-    sendErrorStatus(message, userInitiated)
+    sendSettledCheckStatus({ state: 'error', message, userInitiated })
   }
 
   pendingCheckFailureKey = failureKey
@@ -1585,7 +1598,7 @@ export function checkForUpdatesFromMenu(options?: UpdateCheckOptions): void {
       userInitiatedCheck = false
       finishActiveUpdateCheckAttempt()
       recordCompletedUpdateCheck()
-      sendStatus({ state: 'not-available', userInitiated: true })
+      sendSettledCheckStatus({ state: 'not-available', userInitiated: true })
       return false
     }
     return launch()
@@ -1712,7 +1725,7 @@ async function checkForPinnedBuild(channel: ReleaseChannel, tag: string): Promis
   try {
     const target = resolveTargetBuild(channel, tag)
     if (compareVersions(target.version, app.getVersion()) === 0) {
-      sendStatus({ state: 'not-available', userInitiated: true })
+      sendSettledCheckStatus({ state: 'not-available', userInitiated: true })
       return
     }
     closeLocalBuildFeed()
@@ -1741,7 +1754,7 @@ async function checkForPinnedBuild(channel: ReleaseChannel, tag: string): Promis
     userInitiatedCheck = false
     clearAvailableUpdateContext()
     restoreReleaseUpdateSource()
-    sendStatus({
+    sendSettledCheckStatus({
       state: 'error',
       message: String((error as Error)?.message ?? error),
       userInitiated: true

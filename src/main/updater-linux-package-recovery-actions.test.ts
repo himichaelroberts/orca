@@ -99,6 +99,16 @@ const ARTIFACT = {
   path: '/home/tester/.cache/orca-updater/pending/orca-ide_1.0.61_amd64.deb',
   sha512: 'LHlL7dKoqg98gS2nfQv878dK+UoktbAkm4M20/hoJ2Qr0Kqsa3MSL4VmWy/Lll/MYjQFkpvOxduQ/vswentozA=='
 }
+const MANUAL_INSTALL_STATUS = {
+  state: 'error',
+  message: 'Quit Orca before running the system package install command.',
+  recovery: {
+    kind: 'linux-package-install',
+    packageType: 'deb',
+    reason: 'manual-install-required',
+    version: '1.0.61'
+  }
+} as const satisfies UpdateStatus
 
 describe('linux package recovery actions', () => {
   afterEach(() => {
@@ -197,6 +207,63 @@ describe('linux package recovery actions', () => {
     expect(resolveLinuxPackageInstallInstructionsMock.mock.calls).toEqual([[recovery], [recovery]])
     expect(resolveLinuxPackageRevealTargetMock.mock.calls).toEqual([[recovery], [recovery]])
     expect(showItemInFolderMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('restores recovery after a recheck resolves without a terminal event', async () => {
+    const { send, updater } = await startUpdater()
+    await activateRecovery(updater)
+    send.mockClear()
+
+    updater.checkForUpdatesFromMenu()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(send).toHaveBeenLastCalledWith('updater:status', MANUAL_INSTALL_STATUS)
+    await expect(updater.showLinuxPackage()).resolves.toBeUndefined()
+  })
+
+  it('restores recovery after a recheck fails', async () => {
+    const { send, updater } = await startUpdater()
+    await activateRecovery(updater)
+    autoUpdaterMock.checkForUpdates.mockRejectedValueOnce(new Error('offline'))
+    send.mockClear()
+
+    updater.checkForUpdatesFromMenu()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(send).toHaveBeenLastCalledWith('updater:status', MANUAL_INSTALL_STATUS)
+    await expect(updater.getLinuxPackageInstallInstructions()).resolves.toEqual({
+      ok: true,
+      command: "sudo apt install -- '<pkg>'",
+      packageFileName: 'p'
+    })
+  })
+
+  it('restores recovery when a pinned check resolves to the current version', async () => {
+    const { send, updater } = await startUpdater()
+    await activateRecovery(updater)
+    send.mockClear()
+
+    updater.checkForUpdatesFromMenu({ channel: 'stable', targetTag: 'v1.0.51' })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(send).toHaveBeenLastCalledWith('updater:status', MANUAL_INSTALL_STATUS)
+    await expect(updater.showLinuxPackage()).resolves.toBeUndefined()
+  })
+
+  it('restores recovery when resolving a pinned check fails', async () => {
+    const { send, updater } = await startUpdater()
+    await activateRecovery(updater)
+    send.mockClear()
+
+    updater.checkForUpdatesFromMenu({ channel: 'stable', targetTag: 'not-a-release-tag' })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(send).toHaveBeenLastCalledWith('updater:status', MANUAL_INSTALL_STATUS)
+    await expect(updater.getLinuxPackageInstallInstructions()).resolves.toEqual({
+      ok: true,
+      command: "sudo apt install -- '<pkg>'",
+      packageFileName: 'p'
+    })
   })
 
   it('replaces the structured status when revalidation fails so stale actions die', async () => {
