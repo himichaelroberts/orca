@@ -287,8 +287,11 @@ export class OrcaRuntimeWithRefreshPtyWorktreeRecordsWithControllerInventory ext
         // clears `connected` for every one of its PTYs at once. Only `false` here
         // is an observed absence; `null` means no provider could be asked.
         if (observed === false) {
-          // A provider that observes the owning host answered "absent" for this exact id.
-          this.rememberPtyLivenessVerdict(pty.ptyId, { status: 'exited' })
+          // Drops the doubt without asserting a death: `pty.listProcesses` returns the relay's
+          // CURRENT session map, so a restarted relay omits every id the previous one minted
+          // whether or not those shells died. That is the same union as pty.attach's not-found,
+          // and neither earns `exited` (docs/reference/ssh-execution-boundary.md).
+          this.forgetPtyLivenessVerdict(pty.ptyId)
         } else if (observed === null && this.isSshOwnedPtyId(pty.ptyId)) {
           this.markPtyLivenessUnverifiable(pty.ptyId, NO_OBSERVING_PROVIDER_REASON)
         }

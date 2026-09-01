@@ -23,16 +23,6 @@ export class OrcaRuntimeWithMarkPtyLivenessUnverifiable extends OrcaRuntimeWithO
   }
 
   /**
-   * Records that the host that owns this PTY positively reported it absent. Only a writer holding
-   * that evidence may call it: a transport failure, a lookup that threw, or a client-local set that
-   * no longer lists the id observe nothing and are `unverifiable`
-   * (docs/reference/ssh-execution-boundary.md).
-   */
-  markPtyLivenessExited(ptyId: string): void {
-    this.rememberPtyLivenessVerdict(ptyId, { status: 'exited' })
-  }
-
-  /**
    * Records that Orca asked this PTY to stop — a close, a stop, a teardown.
    *
    * Why before the kill and not at the exit: a requested stop can still be
@@ -50,10 +40,11 @@ export class OrcaRuntimeWithMarkPtyLivenessUnverifiable extends OrcaRuntimeWithO
   }
 
   /**
-   * Null when nothing has been observed either way — which is also what every app start looks
-   * like, since this register is in-memory. Callers deciding whether to respawn or kill must treat
-   * null as "no evidence" and fail closed; only a positively recorded `exited` is a death
-   * certificate.
+   * Null when this register holds no defensible claim — a never-asked host, a fresh app start, or
+   * an absence observation too weak to name (a relay that answered but does not know the id: see
+   * the inventory sweep and handlePtyReattachFailure). It is NOT a death certificate, so a caller
+   * authorizing a kill must fail closed on it; a caller that only has this evidence to work with,
+   * like terminal.recoverPane, refuses on the positive verdicts instead.
    */
   getPtyLivenessVerdict(ptyId: string): PtyLivenessVerdict | null {
     return this.ptyLivenessVerdictByPtyId.get(ptyId)?.verdict ?? null
@@ -107,10 +98,9 @@ export class OrcaRuntimeWithMarkPtyLivenessUnverifiable extends OrcaRuntimeWithO
   }
 
   protected rememberPtyLivenessVerdict(ptyId: string, verdict: PtyLivenessVerdict): void {
-    // An earned death certificate is KEPT, not dropped. Dropping it made the register two-valued
-    // on disk — {live, unverifiable, absent} — and absence is also what a never-asked host and a
-    // fresh app start look like, so a reader could not tell "the host said it is gone" from
-    // "nobody has asked". Retaining it is what lets those readers fail closed on null.
+    // An earned death certificate is KEPT, not dropped, so the register is three-valued on disk as
+    // well as in the type. Its only writer is a host-delivered exit frame; nothing weaker may
+    // reach it (docs/reference/ssh-execution-boundary.md).
     this.ptyLivenessVerdictByPtyId.delete(ptyId)
     this.ptyLivenessObservationSequence += 1
     this.ptyLivenessVerdictByPtyId.set(ptyId, {

@@ -2836,12 +2836,12 @@ export class SshRelaySession {
     )
     clearProviderPtyState(appPtyId)
     deletePtyOwnership(appPtyId)
-    // Only reached when a reachable relay answered for this exact id and reported it absent — the
-    // transport-class failures returned above, and the identity mismatch names a LIVE pty owned by
-    // another pane. Tell the runtime, not just the renderer: `expired` alone says the CLIENT lost
-    // its route, and terminal.recoverPane must be able to tell that apart from the host attesting
-    // the shell is gone before it spawns a replacement (docs/reference/ssh-execution-boundary.md).
-    this.runtime?.onPtyExit(appPtyId, -1, undefined, { hostExitConfirmed: true })
+    // Deliberately does NOT call runtime.onPtyExit: pty.attach answers not-found both when it
+    // verified the pid is dead (pty-handler.ts:1943) and when its session map simply has no such id
+    // (:1936, no liveness check at all) — which is every id after a relay restart, since ids carry a
+    // per-start `ptyIdMintEpoch`. This branch may release the id, but certifying a death from that
+    // union would orphan a live remote shell (docs/reference/ssh-execution-boundary.md). The
+    // renderer gets code -1, which every reader treats as unverified loss.
     this.store.markSshRemotePtyLease(this.targetId, ptyId, 'expired')
     const win = this.getMainWindow()
     if (win && !win.isDestroyed()) {

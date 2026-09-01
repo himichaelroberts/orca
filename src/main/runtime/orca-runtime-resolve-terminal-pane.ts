@@ -101,13 +101,17 @@ export class OrcaRuntimeWithResolveTerminalPane extends OrcaRuntimeWithGetTermin
     // above). `!pty.connected` is the same inference: one dropped relay clears it for every PTY it
     // owned. So the pair can hold over a remote shell that is still running, and createTerminal
     // would rebind the pane away from it, leaving the original orphaned and its agent duplicated.
-    // So recovery needs a positive death certificate, not merely the absence of doubt: the register
-    // is in-memory and three-valued, and a never-asked host, a fresh app start and a pruned entry
-    // all read as `null` alike. Refusing unless the verdict is `exited` is the only reading
-    // that keeps "we have no evidence" from authorizing a shell over a live remote process
-    // (docs/reference/ssh-execution-boundary.md, shared/pty-liveness-verdict.ts).
+    // The runtime grades that: `live` is the host proving the shell survived, `unverifiable` is the
+    // client losing contact, and both refuse. What this gate must NOT require is a positive
+    // `exited`: the only answer that ever reaches it is a reachable relay reporting it has no such
+    // id, and that is a union — pty-handler.ts:1936 throws not-found for an unknown id with no
+    // liveness check, and a relay restart makes every previously minted id unknown. No writer of
+    // `exited` co-occurs with a reattachable `expired` lease either, since a host-delivered exit
+    // frame tombstones the lease `terminated`. Demanding one would close this gate permanently, and
+    // an unrecoverable pane is its own failure (docs/reference/ssh-execution-boundary.md,
+    // shared/pty-liveness-verdict.ts).
     const liveness = this.getPtyLivenessVerdict(pty.ptyId)
-    if (liveness?.status !== 'exited') {
+    if (liveness?.status === 'unverifiable' || liveness?.status === 'live') {
       throw new Error('terminal_not_recoverable')
     }
     // Why: disconnected PTYs can reissue handles during graph cleanup; only a connected replacement satisfies the pane CAS.
