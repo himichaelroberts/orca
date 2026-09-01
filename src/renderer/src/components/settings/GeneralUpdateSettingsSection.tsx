@@ -112,7 +112,7 @@ export function GeneralUpdateSettingsSection(): React.JSX.Element {
             )}
           </Button>
 
-          {updateStatus.state === 'available' ? (
+          {updateStatus.state === 'available' && !updateStatus.externallyManaged ? (
             <Button
               variant="default"
               size="sm"
@@ -168,10 +168,15 @@ export function GeneralUpdateSettingsSection(): React.JSX.Element {
                 'Version'
               )}{' '}
               {updateStatus.version}{' '}
-              {translate(
-                'auto.components.settings.GeneralUpdateSettingsSection.8311da27ba',
-                'is available. Click "Download Update" to download it.'
-              )}{' '}
+              {updateStatus.externallyManaged
+                ? translate(
+                    'auto.components.settings.GeneralUpdateSettingsSection.e3b9d21c07',
+                    'is available. Update Orca through your system package manager — Orca cannot install this release itself.'
+                  )
+                : translate(
+                    'auto.components.settings.GeneralUpdateSettingsSection.8311da27ba',
+                    'is available. Click "Download Update" to download it.'
+                  )}{' '}
               {updateStatus.source !== 'local' && (
                 <a
                   href={

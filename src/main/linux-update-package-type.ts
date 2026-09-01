@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import { hasTrustedPackageManagerFor } from './linux-package-install-command'
 import type { LinuxRootPackageType } from '../shared/update-status-types'
 
 export type { LinuxRootPackageType }
@@ -10,6 +11,7 @@ export type LinuxPackageType = LinuxRootPackageType | 'non-root' | 'unusable'
 
 // Why: `undefined` means "not resolved yet"; every other value is stable for this process.
 let cachedPackageType: LinuxPackageType | undefined
+let cachedExternallyManaged: boolean | undefined
 
 // Bounded by construction: the marker is read at most once per process.
 function warnMarkerUnusable(detail: string): void {
@@ -112,4 +114,23 @@ export function getLinuxPackageType(): LinuxPackageType {
 export function getLinuxRootPackageType(): LinuxRootPackageType | null {
   const packageType = getLinuxPackageType()
   return packageType === 'deb' || packageType === 'rpm' ? packageType : null
+}
+
+/**
+ * Whether the marker claims a root package format this host cannot install. Repackagers (AUR, Nix,
+ * container rebuilds) unpack Orca's .deb and inherit its `package-type` verbatim, so the marker
+ * describes the artifact Orca was built as, never the system that now owns the install. Without a
+ * matching package manager no downloaded package can ever be applied here.
+ *
+ * A false positive is impossible by construction: this reuses the exact manager lists and resolver
+ * that `buildLinuxPackageInstallCommand` already loops over, so any host flagged here would have
+ * failed with `no-package-manager` after the download anyway. The gate only moves that verdict
+ * earlier — it never refuses a host that could have installed the update.
+ */
+export function isExternallyManagedLinuxInstall(): boolean {
+  if (cachedExternallyManaged === undefined) {
+    const packageType = getLinuxRootPackageType()
+    cachedExternallyManaged = packageType !== null && !hasTrustedPackageManagerFor(packageType)
+  }
+  return cachedExternallyManaged
 }

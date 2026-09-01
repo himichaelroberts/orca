@@ -132,6 +132,7 @@ export function UpdateCardStateContent({
       onMediaLoad={onMediaLoad}
       onUpdate={onUpdate}
       onClose={onDismiss}
+      externallyManaged={status.externallyManaged}
     />
   ) : (
     <UpdateAvailableSimpleContent
@@ -139,6 +140,7 @@ export function UpdateCardStateContent({
       releaseUrl={releaseUrl}
       onUpdate={onUpdate}
       onClose={onDismiss}
+      externallyManaged={status.externallyManaged}
     />
   )
 }

@@ -80,7 +80,8 @@ vi.mock('./updater-lifecycle-diagnostics', () => ({
 }))
 vi.mock('./linux-update-package-type', () => ({
   getLinuxPackageType: () => 'deb',
-  getLinuxRootPackageType: () => 'deb'
+  getLinuxRootPackageType: () => 'deb',
+  isExternallyManagedLinuxInstall: () => false
 }))
 vi.mock('./linux-package-update-recovery', () => ({
   captureLinuxPackageArtifact: vi.fn(() => getTrackedLinuxPackageArtifactMock()),

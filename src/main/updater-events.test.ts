@@ -2,17 +2,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UpdateStatus } from '../shared/update-status-types'
 import type { registerAutoUpdaterHandlers } from './updater-events'
 
-const { appMock, nativeUpdaterMock, getLinuxPackageTypeMock, getLinuxRootPackageTypeMock } =
-  vi.hoisted(() => ({
-    appMock: {
-      isPackaged: true,
-      getVersion: vi.fn(() => '1.0.51'),
-      on: vi.fn()
-    },
-    nativeUpdaterMock: { on: vi.fn() },
-    getLinuxPackageTypeMock: vi.fn<() => 'deb' | 'rpm' | 'non-root' | 'unusable'>(() => 'deb'),
-    getLinuxRootPackageTypeMock: vi.fn<() => 'deb' | 'rpm' | null>(() => 'deb')
-  }))
+const {
+  appMock,
+  nativeUpdaterMock,
+  getLinuxPackageTypeMock,
+  getLinuxRootPackageTypeMock,
+  isExternallyManagedLinuxInstallMock
+} = vi.hoisted(() => ({
+  appMock: {
+    isPackaged: true,
+    getVersion: vi.fn(() => '1.0.51'),
+    on: vi.fn()
+  },
+  nativeUpdaterMock: { on: vi.fn() },
+  getLinuxPackageTypeMock: vi.fn<() => 'deb' | 'rpm' | 'non-root' | 'unusable'>(() => 'deb'),
+  getLinuxRootPackageTypeMock: vi.fn<() => 'deb' | 'rpm' | null>(() => 'deb'),
+  isExternallyManagedLinuxInstallMock: vi.fn<() => boolean>(() => false)
+}))
 
 vi.mock('electron', () => ({
   app: appMock,
@@ -23,7 +29,8 @@ vi.mock('electron', () => ({
 // Why: only the packaged-marker resolver is faked so the real artifact tracking runs.
 vi.mock('./linux-update-package-type', () => ({
   getLinuxPackageType: getLinuxPackageTypeMock,
-  getLinuxRootPackageType: getLinuxRootPackageTypeMock
+  getLinuxRootPackageType: getLinuxRootPackageTypeMock,
+  isExternallyManagedLinuxInstall: isExternallyManagedLinuxInstallMock
 }))
 
 vi.mock('./updater-changelog', () => ({ fetchChangelog: vi.fn().mockResolvedValue(null) }))
@@ -115,6 +122,8 @@ describe('registerAutoUpdaterHandlers linux package artifact tracking', () => {
     appMock.getVersion.mockReset().mockReturnValue('1.0.51')
     getLinuxPackageTypeMock.mockReset().mockReturnValue('deb')
     getLinuxRootPackageTypeMock.mockReset().mockReturnValue('deb')
+    isExternallyManagedLinuxInstallMock.mockReset().mockReturnValue(false)
+    appMock.isPackaged = true
   })
 
   const register = async (
@@ -254,6 +263,10 @@ describe('registerAutoUpdaterHandlers linux package artifact tracking', () => {
     const { emit, context, getArtifact } = await register()
     emit('update-downloaded', downloadedEvent())
 
+    // Why: the download already produced this exact status, so the assertion below could pass
+    // on that call alone. Clear it so only the second emit can satisfy it.
+    vi.mocked(context.sendStatus).mockClear()
+
     emit('update-not-available')
 
     expect(getArtifact()).toEqual(expect.objectContaining({ version: '1.0.61' }))
@@ -272,6 +285,10 @@ describe('registerAutoUpdaterHandlers linux package artifact tracking', () => {
   it('keeps manual-install recovery when a later check finds only the installed release', async () => {
     const { emit, context, getArtifact } = await register()
     emit('update-downloaded', downloadedEvent())
+
+    // Why: the download already produced this exact status, so the assertion below could pass
+    // on that call alone. Clear it so only the second emit can satisfy it.
+    vi.mocked(context.sendStatus).mockClear()
 
     emit('update-available', { version: '1.0.51' })
 
@@ -390,28 +407,38 @@ describe('registerAutoUpdaterHandlers linux package artifact tracking', () => {
     expect(getArtifact()).toBeNull()
   })
 
-  it('keeps manual-install recovery through a same-version recheck', async () => {
-    let status: UpdateStatus = { state: 'downloading', percent: 100, version: '1.0.61' }
-    const { emit, context, getArtifact } = await register({
-      getCurrentStatus: vi.fn(() => status)
-    })
-    emit('update-downloaded', downloadedEvent())
-
-    status = { state: 'checking' }
-    emit('update-available', { version: '1.0.61' })
-
-    expect(getArtifact()).toEqual(expect.objectContaining({ version: '1.0.61', path: DEB_PATH }))
-    await vi.waitFor(() =>
-      expect(context.sendStatus).toHaveBeenLastCalledWith({
-        state: 'error',
-        message: 'Quit Orca before running the system package install command.',
-        recovery: {
-          kind: 'linux-package-install',
-          packageType: 'deb',
-          reason: 'manual-install-required',
-          version: '1.0.61'
-        }
+  // #17702: the externallyManaged flag is spread onto the fallback object only, so a retained
+  // manual-install status must still win. Cross-version case: the host could self-update when it
+  // downloaded, and cannot now.
+  it.each([false, true])(
+    'keeps manual-install recovery through a same-version recheck (externallyManaged=%s)',
+    async (externallyManaged) => {
+      isExternallyManagedLinuxInstallMock.mockReturnValue(externallyManaged)
+      let status: UpdateStatus = { state: 'downloading', percent: 100, version: '1.0.61' }
+      const { emit, context, getArtifact } = await register({
+        getCurrentStatus: vi.fn(() => status)
       })
-    )
-  })
+      emit('update-downloaded', downloadedEvent())
+
+      // Why: the download already emitted the manual-install status, so waitFor would pass on that
+      // call alone. Clear it so the assertion can only be satisfied by the recheck.
+      vi.mocked(context.sendStatus).mockClear()
+      status = { state: 'checking' }
+      emit('update-available', { version: '1.0.61' })
+
+      expect(getArtifact()).toEqual(expect.objectContaining({ version: '1.0.61', path: DEB_PATH }))
+      await vi.waitFor(() =>
+        expect(context.sendStatus).toHaveBeenLastCalledWith({
+          state: 'error',
+          message: 'Quit Orca before running the system package install command.',
+          recovery: {
+            kind: 'linux-package-install',
+            packageType: 'deb',
+            reason: 'manual-install-required',
+            version: '1.0.61'
+          }
+        })
+      )
+    }
+  )
 })

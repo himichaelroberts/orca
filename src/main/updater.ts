@@ -35,9 +35,10 @@ import {
 } from './update-install-exit-watchdog'
 import { registerAutoUpdaterHandlers } from './updater-events'
 import { recordUpdaterLifecycle } from './updater-lifecycle-diagnostics'
-import { getLinuxPackageType } from './linux-update-package-type'
+import { getLinuxPackageType, isExternallyManagedLinuxInstall } from './linux-update-package-type'
 import {
   getRetainedLinuxPackageManualInstallStatus,
+  LINUX_PACKAGE_EXTERNALLY_MANAGED_MESSAGE,
   LINUX_PACKAGE_MARKER_UNUSABLE_MESSAGE
 } from './linux-package-downloaded-status'
 import {
@@ -2185,6 +2186,25 @@ export function downloadUpdate(): void {
   }
   const version = currentStatus.state === 'available' ? currentStatus.version : availableVersion
   if (!version) {
+    return
+  }
+  // Why: main owns this verdict, not the card — an older renderer or a direct IPC call must not be
+  // able to spend a package download that this host could never install.
+  if (isExternallyManagedLinuxInstall()) {
+    recordUpdaterLifecycle('linux_package_externally_managed_download_blocked', {
+      version
+    })
+    // Why: a pinned jump resolves to 'release' on Linux (no dev-channel artifact is built for it),
+    // so refusing without unwinding would strand isPinnedBuildActive and silently kill every
+    // background check for the rest of the process. A no-op on the ordinary release path.
+    clearAvailableUpdateContext()
+    restoreReleaseUpdateSource()
+    sendStatus({
+      state: 'error',
+      message: LINUX_PACKAGE_EXTERNALLY_MANAGED_MESSAGE,
+      version,
+      retryable: false
+    })
     return
   }
   if (deferHeadlessServeInstall('download', version)) {

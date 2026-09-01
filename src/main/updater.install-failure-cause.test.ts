@@ -102,7 +102,8 @@ vi.mock('./updater-lifecycle-diagnostics', () => ({
 }))
 vi.mock('./linux-update-package-type', () => ({
   getLinuxPackageType: () => 'non-root',
-  getLinuxRootPackageType: () => null
+  getLinuxRootPackageType: () => null,
+  isExternallyManagedLinuxInstall: () => false
 }))
 
 // The real electron-updater DebUpdater failure text when elevation is impossible.

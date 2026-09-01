@@ -48,6 +48,7 @@ type UpdaterModuleFactories = {
   linuxUpdatePackageType: () => {
     getLinuxPackageType: Mock<() => LinuxPackageType>
     getLinuxRootPackageType: Mock<() => 'deb' | 'rpm' | null>
+    isExternallyManagedLinuxInstall: Mock<() => boolean>
   }
   updaterLifecycleDiagnostics: () => { recordUpdaterLifecycle: UpdaterSpy }
   updaterChangelog: () => { fetchChangelog: UpdaterSpy }
@@ -74,6 +75,7 @@ export type UpdaterMocks = {
   powerMonitorOnMock: UpdaterSpy
   getLinuxPackageTypeMock: Mock<() => LinuxPackageType>
   getLinuxRootPackageTypeMock: Mock<() => 'deb' | 'rpm' | null>
+  isExternallyManagedLinuxInstallMock: Mock<() => boolean>
   recordUpdaterLifecycleMock: UpdaterSpy
   fetchChangelogMock: UpdaterSpy
   fetchNudgeMock: UpdaterSpy
@@ -214,6 +216,7 @@ export function createUpdaterMocks(): UpdaterMocks {
   const getLinuxPackageTypeMock = vi.fn<() => LinuxPackageType>(() => {
     return getLinuxRootPackageTypeMock() ?? 'non-root'
   })
+  const isExternallyManagedLinuxInstallMock = vi.fn<() => boolean>(() => false)
   const recordUpdaterLifecycleMock = vi.fn()
   const fetchChangelogMock = vi.fn()
   const fetchNudgeMock = vi.fn()
@@ -242,7 +245,8 @@ export function createUpdaterMocks(): UpdaterMocks {
     // Why: only the marker resolver is faked so the real artifact capture/redaction path stays under test.
     linuxUpdatePackageType: () => ({
       getLinuxPackageType: getLinuxPackageTypeMock,
-      getLinuxRootPackageType: getLinuxRootPackageTypeMock
+      getLinuxRootPackageType: getLinuxRootPackageTypeMock,
+      isExternallyManagedLinuxInstall: isExternallyManagedLinuxInstallMock
     }),
     updaterLifecycleDiagnostics: () => ({ recordUpdaterLifecycle: recordUpdaterLifecycleMock }),
     updaterChangelog: () => ({ fetchChangelog: fetchChangelogMock }),
@@ -290,6 +294,7 @@ export function createUpdaterMocks(): UpdaterMocks {
     getLinuxPackageTypeMock.mockReset().mockImplementation(() => {
       return getLinuxRootPackageTypeMock() ?? 'non-root'
     })
+    isExternallyManagedLinuxInstallMock.mockReset().mockReturnValue(false)
     recordUpdaterLifecycleMock.mockReset()
     fetchNudgeMock.mockReset().mockResolvedValue(null)
     shouldApplyNudgeMock.mockReset().mockReturnValue(false)
@@ -322,6 +327,7 @@ export function createUpdaterMocks(): UpdaterMocks {
     powerMonitorOnMock,
     getLinuxPackageTypeMock,
     getLinuxRootPackageTypeMock,
+    isExternallyManagedLinuxInstallMock,
     recordUpdaterLifecycleMock,
     fetchChangelogMock,
     fetchNudgeMock,

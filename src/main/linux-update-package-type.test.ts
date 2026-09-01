@@ -4,9 +4,15 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LinuxPackageType, LinuxRootPackageType } from './linux-update-package-type'
 
-const { appMock } = vi.hoisted(() => ({ appMock: { isPackaged: true } }))
+const { appMock, hasTrustedPackageManagerForMock } = vi.hoisted(() => ({
+  appMock: { isPackaged: true },
+  hasTrustedPackageManagerForMock: vi.fn(() => true)
+}))
 
 vi.mock('electron', () => ({ app: appMock }))
+vi.mock('./linux-package-install-command', () => ({
+  hasTrustedPackageManagerFor: hasTrustedPackageManagerForMock
+}))
 
 const originalPlatform = process.platform
 const originalResourcesPath = process.resourcesPath as string | undefined
@@ -19,6 +25,7 @@ let resourcesDir: string
 type PackageTypeModule = {
   getLinuxPackageType: () => LinuxPackageType
   getLinuxRootPackageType: () => LinuxRootPackageType | null
+  isExternallyManagedLinuxInstall: () => boolean
   isLegacyAppImageRuntimeIdentity: (identity: {
     appImagePath: unknown
     appDirPath: unknown
@@ -49,6 +56,7 @@ async function loadPackageType(): Promise<PackageTypeModule> {
 
 beforeEach(async () => {
   vi.resetModules()
+  hasTrustedPackageManagerForMock.mockReset().mockReturnValue(true)
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   appMock.isPackaged = true
   delete process.env.APPIMAGE
@@ -303,5 +311,56 @@ describe('getLinuxRootPackageType', () => {
     const module = await loadPackageType()
     module.getLinuxPackageType()
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('isExternallyManagedLinuxInstall', () => {
+  // The #17702 case: an AUR/Nix/container rebuild of the .deb inherits `package-type` verbatim.
+  it('reports a deb marker with no deb package manager as externally managed', async () => {
+    hasTrustedPackageManagerForMock.mockReturnValue(false)
+    await writeMarker('deb')
+    const module = await loadPackageType()
+    expect(module.isExternallyManagedLinuxInstall()).toBe(true)
+    expect(hasTrustedPackageManagerForMock).toHaveBeenCalledWith('deb')
+  })
+
+  it('reports an rpm marker with no rpm package manager as externally managed', async () => {
+    hasTrustedPackageManagerForMock.mockReturnValue(false)
+    await writeMarker('rpm')
+    const module = await loadPackageType()
+    expect(module.isExternallyManagedLinuxInstall()).toBe(true)
+    expect(hasTrustedPackageManagerForMock).toHaveBeenCalledWith('rpm')
+  })
+
+  it('leaves a real deb host self-updatable', async () => {
+    await writeMarker('deb')
+    const module = await loadPackageType()
+    expect(module.isExternallyManagedLinuxInstall()).toBe(false)
+  })
+
+  it('never probes the host for an AppImage install', async () => {
+    hasTrustedPackageManagerForMock.mockReturnValue(false)
+    await writeMarker('AppImage')
+    const module = await loadPackageType()
+    expect(module.isExternallyManagedLinuxInstall()).toBe(false)
+    expect(hasTrustedPackageManagerForMock).not.toHaveBeenCalled()
+  })
+
+  it('never probes the host for an unusable marker', async () => {
+    hasTrustedPackageManagerForMock.mockReturnValue(false)
+    await writeMarker('snap')
+    const module = await loadPackageType()
+    expect(module.isExternallyManagedLinuxInstall()).toBe(false)
+    expect(hasTrustedPackageManagerForMock).not.toHaveBeenCalled()
+  })
+
+  it('probes the host at most once per process', async () => {
+    hasTrustedPackageManagerForMock.mockReturnValue(false)
+    await writeMarker('deb')
+    const module = await loadPackageType()
+    module.isExternallyManagedLinuxInstall()
+    module.isExternallyManagedLinuxInstall()
+    module.isExternallyManagedLinuxInstall()
+    expect(hasTrustedPackageManagerForMock).toHaveBeenCalledTimes(1)
   })
 })

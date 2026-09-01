@@ -78,7 +78,8 @@ vi.mock('electron-updater', () => ({ autoUpdater: autoUpdaterMock }))
 vi.mock('./electron-updater-loader', () => ({ loadElectronAutoUpdater: () => autoUpdaterMock }))
 vi.mock('./linux-update-package-type', () => ({
   getLinuxPackageType: () => 'non-root',
-  getLinuxRootPackageType: () => null
+  getLinuxRootPackageType: () => null,
+  isExternallyManagedLinuxInstall: () => false
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 vi.mock('./ipc/pty', () => ({ killAllPty: killAllPtyMock }))
