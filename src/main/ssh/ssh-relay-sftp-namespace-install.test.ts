@@ -103,6 +103,9 @@ const RELAY_SUFFIX = '.orca-remote/relay-0.1.0+testhash'
 const SHELL_RELAY_DIR = `${SHELL_HOME}/${RELAY_SUFFIX}`
 const SFTP_RELAY_DIR = `${SFTP_HOME}/${RELAY_SUFFIX}`
 const MARKER_PATTERN = /\.sftp-namespace-[0-9a-f]{32}/
+// Stdout of the relay-side pty-master cloexec patch, which runs on Linux hosts once a
+// freshly installed node-pty loads (#17915).
+const NPTY_CLOEXEC_PATCHED = 'ORCA-NPTY-CLOEXEC:patched\n'
 const STAGE_OWNER = '.sftp-namespace-00000000000000000000000000000000'
 const STAGE_RESERVED = `__ORCA_UPLOAD_STAGE_SLOT__${STAGE_OWNER}:slot-0`
 const STAGE_PROMOTED = `__ORCA_UPLOAD_STAGE_PROMOTION__${STAGE_OWNER}:PROMOTED`
@@ -254,6 +257,7 @@ const POSIX_FIRST_INSTALL = [
   '', // chmod prebuilds
   'ORCA-NPTY-PROBE-OK\n',
   '', // rm probe stderr
+  NPTY_CLOEXEC_PATCHED,
   '', // clean stage root
   'DEAD',
   '', // publish the per-launch credential
@@ -271,6 +275,7 @@ const POSIX_SYSTEM_SSH_FIRST_INSTALL = [
   '', // chmod prebuilds
   'ORCA-NPTY-PROBE-OK\n',
   '', // rm probe stderr
+  NPTY_CLOEXEC_PATCHED,
   '', // clean stage root
   'DEAD',
   '', // publish the per-launch credential
@@ -288,6 +293,7 @@ const POSIX_REPAIR = [
   '', // chmod prebuilds
   'ORCA-NPTY-PROBE-OK\n',
   '', // rm probe stderr
+  NPTY_CLOEXEC_PATCHED,
   'DEAD',
   '', // publish the per-launch credential
   'READY'
@@ -698,6 +704,7 @@ describe('relay repair writes on a split SFTP namespace', () => {
       '', // chmod prebuilds
       'ORCA-NPTY-PROBE-OK\n',
       '', // rm probe stderr
+      NPTY_CLOEXEC_PATCHED,
       'DEAD',
       '', // remote credential generation
       'READY'
@@ -723,6 +730,7 @@ describe('relay repair writes on a split SFTP namespace', () => {
       '', // chmod prebuilds
       'ORCA-NPTY-PROBE-OK\n',
       '', // rm probe stderr
+      NPTY_CLOEXEC_PATCHED,
       'DEAD',
       '', // remote credential generation
       'READY'
