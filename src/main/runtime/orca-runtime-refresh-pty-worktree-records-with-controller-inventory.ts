@@ -287,7 +287,8 @@ export class OrcaRuntimeWithRefreshPtyWorktreeRecordsWithControllerInventory ext
         // clears `connected` for every one of its PTYs at once. Only `false` here
         // is an observed absence; `null` means no provider could be asked.
         if (observed === false) {
-          this.forgetPtyLivenessVerdict(pty.ptyId)
+          // A provider that observes the owning host answered "absent" for this exact id.
+          this.rememberPtyLivenessVerdict(pty.ptyId, { status: 'exited' })
         } else if (observed === null && this.isSshOwnedPtyId(pty.ptyId)) {
           this.markPtyLivenessUnverifiable(pty.ptyId, NO_OBSERVING_PROVIDER_REASON)
         }

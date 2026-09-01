@@ -221,4 +221,65 @@ describe('OrcaRuntimeService', () => {
     ).not.toBeNull()
     expect(createTerminal).not.toHaveBeenCalled()
   })
+  it('refuses to recreate a shell for an expired lease with no liveness evidence at all', async () => {
+    // The register is an in-memory Map, so `null` is what a fresh app start, a never-asked host and
+    // a certified death all look like. Reading absence of doubt as permission opened this gate by
+    // default at every launch: `!pty.connected` is cleared for every PTY a dropped relay owned, and
+    // `expired` only ever says the CLIENT lost its route, so the pair can hold over a shell that is
+    // still running. Recovery now needs a positive `exited`.
+    const tabId = 'tab-no-verdict'
+    const ptyId = 'pty-no-verdict'
+    const runtime = createRuntimeWithSshLease(ptyId, tabId)
+    const paneKey = makePaneKey(tabId, HEADLESS_LEAF_ID)
+    runtime.registerPty(ptyId, TEST_WORKTREE_ID, null, { tabId, leafId: HEADLESS_LEAF_ID })
+    const handle = runtime.resolveTerminalPane(paneKey, TEST_WORKTREE_ID).handle
+    // Disconnected with no reported exit code and no host confirmation: nothing observed the process.
+    runtime.onPtyExit(ptyId, -1)
+    expect(runtime.getPtyLivenessVerdict(ptyId)).toBeNull()
+    const createTerminal = vi.spyOn(runtime, 'createTerminal').mockResolvedValue({
+      handle: 'term-replacement',
+      tabId,
+      paneKey,
+      ptyId: 'pty-replacement',
+      worktreeId: TEST_WORKTREE_ID,
+      title: null,
+      surface: 'background'
+    })
+
+    await expect(runtime.recoverTerminalPane(paneKey, TEST_WORKTREE_ID, handle)).rejects.toThrow(
+      'terminal_not_recoverable'
+    )
+    expect(createTerminal).not.toHaveBeenCalled()
+  })
+
+  it('recreates a shell once the owning host has attested the PTY is gone', async () => {
+    // The other direction, through the writer the relay's absence branch now uses: a pane whose
+    // shell genuinely died must still get a replacement.
+    const tabId = 'tab-attested-exit'
+    const ptyId = 'ssh:ssh-target@@pty-11'
+    const runtime = createRuntimeWithSshLease(ptyId, tabId)
+    const paneKey = makePaneKey(tabId, HEADLESS_LEAF_ID)
+    runtime.registerPty(ptyId, TEST_WORKTREE_ID, 'ssh-target', { tabId, leafId: HEADLESS_LEAF_ID })
+    const handle = runtime.resolveTerminalPane(paneKey, TEST_WORKTREE_ID).handle
+    runtime.onPtyExit(ptyId, -1)
+    expect(runtime.getPtyLivenessVerdict(ptyId)?.status).toBe('unverifiable')
+
+    runtime.markPtyLivenessExited(ptyId)
+
+    expect(runtime.getPtyLivenessVerdict(ptyId)?.status).toBe('exited')
+    const createTerminal = vi.spyOn(runtime, 'createTerminal').mockResolvedValue({
+      handle: 'term-replacement',
+      tabId,
+      paneKey,
+      ptyId: 'pty-replacement',
+      worktreeId: TEST_WORKTREE_ID,
+      title: null,
+      surface: 'background'
+    })
+
+    await expect(
+      runtime.recoverTerminalPane(paneKey, TEST_WORKTREE_ID, handle)
+    ).resolves.toMatchObject({ handle: 'term-replacement' })
+    expect(createTerminal).toHaveBeenCalledOnce()
+  })
 })

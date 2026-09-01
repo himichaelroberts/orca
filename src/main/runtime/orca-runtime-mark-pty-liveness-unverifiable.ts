@@ -23,6 +23,16 @@ export class OrcaRuntimeWithMarkPtyLivenessUnverifiable extends OrcaRuntimeWithO
   }
 
   /**
+   * Records that the host that owns this PTY positively reported it absent. Only a writer holding
+   * that evidence may call it: a transport failure, a lookup that threw, or a client-local set that
+   * no longer lists the id observe nothing and are `unverifiable`
+   * (docs/reference/ssh-execution-boundary.md).
+   */
+  markPtyLivenessExited(ptyId: string): void {
+    this.rememberPtyLivenessVerdict(ptyId, { status: 'exited' })
+  }
+
+  /**
    * Records that Orca asked this PTY to stop — a close, a stop, a teardown.
    *
    * Why before the kill and not at the exit: a requested stop can still be
@@ -39,7 +49,12 @@ export class OrcaRuntimeWithMarkPtyLivenessUnverifiable extends OrcaRuntimeWithO
     return this.stopRequestedPtyIds.has(ptyId)
   }
 
-  /** Null when nothing has been observed either way, so callers keep their own default. */
+  /**
+   * Null when nothing has been observed either way — which is also what every app start looks
+   * like, since this register is in-memory. Callers deciding whether to respawn or kill must treat
+   * null as "no evidence" and fail closed; only a positively recorded `exited` is a death
+   * certificate.
+   */
   getPtyLivenessVerdict(ptyId: string): PtyLivenessVerdict | null {
     return this.ptyLivenessVerdictByPtyId.get(ptyId)?.verdict ?? null
   }
@@ -92,11 +107,10 @@ export class OrcaRuntimeWithMarkPtyLivenessUnverifiable extends OrcaRuntimeWithO
   }
 
   protected rememberPtyLivenessVerdict(ptyId: string, verdict: PtyLivenessVerdict): void {
-    if (verdict.status === 'exited') {
-      // An earned death certificate ends the question; nothing left to remember.
-      this.ptyLivenessVerdictByPtyId.delete(ptyId)
-      return
-    }
+    // An earned death certificate is KEPT, not dropped. Dropping it made the register two-valued
+    // on disk — {live, unverifiable, absent} — and absence is also what a never-asked host and a
+    // fresh app start look like, so a reader could not tell "the host said it is gone" from
+    // "nobody has asked". Retaining it is what lets those readers fail closed on null.
     this.ptyLivenessVerdictByPtyId.delete(ptyId)
     this.ptyLivenessObservationSequence += 1
     this.ptyLivenessVerdictByPtyId.set(ptyId, {
