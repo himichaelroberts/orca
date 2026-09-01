@@ -10930,7 +10930,7 @@
           "restarting": "Restarting…",
           "updated": "Updated",
           "failed": "Update failed",
-          "serviceManagerHelp": "Update Orca through the service manager that starts this server.",
+          "serviceManagerHelp": "Update Orca on the server host — through its system package manager if it was installed from a .deb or .rpm, otherwise through the service manager that starts it.",
           "unpackedHelp": "Development builds must be updated from their source checkout.",
           "legacyHelp": "Update this server manually once to enable remote updates."
         },
