@@ -146,6 +146,14 @@ describe('serve-mode-argv', () => {
     ).toEqual(['/AppRun', '--serve', '--serve-port', '9090', '--serve-pairing-address', '0.0.0.0'])
   })
 
+  it('keeps equals-form values that start with a flag marker intact', () => {
+    expect(normalizeServeModeArgv(['/AppRun', 'serve', '--pairing-address=--no-pairng'])).toEqual([
+      '/AppRun',
+      '--serve',
+      '--serve-pairing-address=--no-pairng'
+    ])
+  })
+
   it('translates serve flags in the mixed `--serve --port` form', () => {
     // Why: leaving these untranslated silently kept pairing enabled despite --no-pairing.
     expect(normalizeServeModeArgv(['orca', '--serve', '--port', '9090', '--no-pairing'])).toEqual([
