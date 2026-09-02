@@ -21,11 +21,17 @@ function makeFsProvider(overrides: Record<string, unknown> = {}) {
     readFile: vi.fn(async () => ({ content: '', isBinary: false })),
     createDir: vi.fn(async () => undefined),
     writeFile: vi.fn(async () => undefined),
-    stat: vi.fn(async () => {
-      throw new Error('missing')
+    stat: vi.fn(async (path: string) => {
+      throw enoent(path)
     }),
     ...overrides
   }
+}
+
+function enoent(path: string): Error {
+  // Why the code: the presets use isENOENT to separate absence from a transport
+  // or permission failure, so a bare Error here would test the wrong branch.
+  return Object.assign(new Error(`ENOENT: no such file, stat '${path}'`), { code: 'ENOENT' })
 }
 
 /** stat that reports only the listed paths as present, like a real host. */
@@ -34,7 +40,7 @@ function statOnly(paths: string[]) {
     if (paths.includes(path)) {
       return {} as never
     }
-    throw new Error('missing')
+    throw enoent(path)
   })
 }
 
@@ -318,7 +324,7 @@ describe('markRemoteAgentWorkspaceTrusted', () => {
         if (store.has(path)) {
           return {} as never
         }
-        throw new Error('missing')
+        throw enoent(path)
       }),
       readFile: vi.fn(async (path: string) => {
         // Yield between read and write so an unserialized pair interleaves.
@@ -349,5 +355,46 @@ describe('markRemoteAgentWorkspaceTrusted', () => {
     }
     expect(parsed.projects['/real/repo/a']).toEqual({ hasTrustDialogAccepted: true })
     expect(parsed.projects['/real/repo/b']).toEqual({ hasTrustDialogAccepted: true })
+  })
+
+  it('refuses to write when the config probe fails for a non-absence reason', async () => {
+    // A transport reset is not "no config yet". Treating it as absent is what
+    // would replace a live config, so the write must abort.
+    const fsProvider = makeFsProvider({
+      stat: vi.fn(async (path: string) => {
+        if (path === '/home/u/.claude/.claude.json') {
+          throw enoent(path)
+        }
+        throw new Error('connection reset by peer')
+      })
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(fsProvider.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('refuses to guess the config path when the colocated probe fails transiently', async () => {
+    // Falling back to ~/.claude.json here could merge trust into a file the
+    // session never reads — a silent no-op that leaves the dialog firing.
+    const fsProvider = makeFsProvider({
+      stat: vi.fn(async () => {
+        throw new Error('permission denied')
+      })
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(fsProvider.writeFile).not.toHaveBeenCalled()
   })
 })

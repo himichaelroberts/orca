@@ -1,5 +1,6 @@
 import type { AgentTrustPreset } from './agent-trust-presets'
 import { runExclusivelyForAgentConfigFile } from './agent-config-mutation-queue'
+import { isENOENT } from './ipc/filesystem-path-containment'
 import { upsertProjectTrustLevelInContent } from './codex/config-toml-trust'
 import { getActiveMultiplexer } from './ssh/ssh-target-registry'
 import { getSshFilesystemProvider } from './providers/ssh-filesystem-dispatch'
@@ -162,6 +163,9 @@ async function markRemoteClaudeProjectTrusted(
   connectionId: string
 ): Promise<void> {
   const configPath = await resolveRemoteClaudeConfigPath(fsProvider, remoteHome)
+  if (!configPath) {
+    return
+  }
   // Why: this is a read-modify-write of a file that carries the remote user's
   // auth, history, and every other project entry. Two workspace creations on
   // one host would otherwise write stale snapshots and drop each other's trust
@@ -206,14 +210,14 @@ async function readRemoteClaudeConfig(
   fsProvider: IFilesystemProvider,
   configPath: string
 ): Promise<Record<string, unknown> | 'unreadable'> {
-  let exists = true
   try {
     await fsProvider.stat(configPath)
-  } catch {
-    exists = false
-  }
-  if (!exists) {
-    return {}
+  } catch (error) {
+    // Why isENOENT and not a bare catch: `stat` rejects on absence AND on
+    // transport resets and permission denials, and reading "couldn't check" as
+    // "absent" is what would overwrite a live config — the exact failure this
+    // function exists to prevent.
+    return isENOENT(error) ? {} : 'unreadable'
   }
   let content: string
   try {
@@ -250,12 +254,18 @@ async function readRemoteClaudeConfig(
 async function resolveRemoteClaudeConfigPath(
   fsProvider: IFilesystemProvider,
   remoteHome: string
-): Promise<string> {
+): Promise<string | null> {
   const colocated = `${remoteHome}/.claude/.claude.json`
   try {
     await fsProvider.stat(colocated)
     return colocated
-  } catch {
-    return `${remoteHome}/.claude.json`
+  } catch (error) {
+    if (isENOENT(error)) {
+      return `${remoteHome}/.claude.json`
+    }
+    // Why null rather than the home path: a non-ENOENT probe failure means we
+    // do not know which file the session reads, and merging trust into the
+    // wrong one is a silent no-op that leaves the dialog firing.
+    return null
   }
 }
