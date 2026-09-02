@@ -1,3 +1,4 @@
+import type { AgentTrustPreset } from '../../shared/agent-trust-preset'
 import type {
   AgentStatusClearIpcPayload,
   AgentStatusIpcPayload,
@@ -45,7 +46,7 @@ export type AgentStatusApi = {
 
 export type AgentTrustApi = {
   markTrusted: (args: {
-    preset: 'cursor' | 'copilot' | 'codex'
+    preset: AgentTrustPreset
     workspacePath: string
     connectionId?: string
   }) => Promise<void>

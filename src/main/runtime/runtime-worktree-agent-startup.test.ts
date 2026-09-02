@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  markCodexProjectTrusted: vi.fn(),
-  markCopilotFolderTrusted: vi.fn(),
-  markCursorWorkspaceTrusted: vi.fn()
+  applyLocalAgentTrustPreset: vi.fn()
 }))
 
 vi.mock('../agent-trust-presets', () => mocks)
@@ -11,9 +9,14 @@ vi.mock('../agent-trust-presets', () => mocks)
 import { markLocalWorktreeTrusted } from './runtime-worktree-agent-startup'
 
 describe('markLocalWorktreeTrusted', () => {
-  it('waits for the Codex trust write before resolving', async () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.applyLocalAgentTrustPreset.mockResolvedValue(undefined)
+  })
+
+  it('waits for the trust write before resolving', async () => {
     let finish!: () => void
-    mocks.markCodexProjectTrusted.mockReturnValue(
+    mocks.applyLocalAgentTrustPreset.mockReturnValue(
       new Promise<void>((resolve) => {
         finish = resolve
       })
@@ -27,12 +30,24 @@ describe('markLocalWorktreeTrusted', () => {
     expect(settled).toBe(false)
     finish()
     await marking
-    expect(mocks.markCodexProjectTrusted).toHaveBeenCalledWith('/workspace/app')
+    expect(mocks.applyLocalAgentTrustPreset).toHaveBeenCalledWith('codex', '/workspace/app')
   })
 
-  it('contains a rejected Codex trust write', async () => {
-    mocks.markCodexProjectTrusted.mockRejectedValueOnce(new Error('write failed'))
+  it('contains a rejected trust write', async () => {
+    mocks.applyLocalAgentTrustPreset.mockRejectedValueOnce(new Error('write failed'))
 
     await expect(markLocalWorktreeTrusted('codex', '/workspace/app')).resolves.toBeUndefined()
+  })
+
+  it('resolves the claude preset so the Chat UI launch is not left at the trust dialog', async () => {
+    await markLocalWorktreeTrusted('claude', '/workspace/app')
+
+    expect(mocks.applyLocalAgentTrustPreset).toHaveBeenCalledWith('claude', '/workspace/app')
+  })
+
+  it('skips agents with no preset', async () => {
+    await markLocalWorktreeTrusted('gemini', '/workspace/app')
+
+    expect(mocks.applyLocalAgentTrustPreset).not.toHaveBeenCalled()
   })
 })

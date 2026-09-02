@@ -11,11 +11,7 @@ import {
 } from '../../shared/tui-agent-launch-defaults'
 import { buildAgentDraftLaunchPlan, buildAgentStartupPlan } from '../../shared/tui-agent-startup'
 import { resolveLocalWindowsAgentStartupShell } from '../../shared/windows-terminal-shell'
-import {
-  markCodexProjectTrusted,
-  markCopilotFolderTrusted,
-  markCursorWorkspaceTrusted
-} from '../agent-trust-presets'
+import { applyLocalAgentTrustPreset } from '../agent-trust-presets'
 import {
   detectInstalledAgentsWithShellPathHydration,
   detectRemoteAgents
@@ -188,14 +184,7 @@ export async function markLocalWorktreeTrusted(
     return
   }
   try {
-    if (preset === 'cursor') {
-      markCursorWorkspaceTrusted(workspacePath)
-    } else if (preset === 'copilot') {
-      markCopilotFolderTrusted(workspacePath)
-    } else if (preset === 'codex') {
-      // Why: the Codex write queues behind any in-flight hook grant, so the agent must not launch until it lands.
-      await markCodexProjectTrusted(workspacePath)
-    }
+    await applyLocalAgentTrustPreset(preset, workspacePath)
   } catch {
     // Best-effort: the user can still accept the agent trust prompt manually.
   }

@@ -583,12 +583,12 @@ describe('staged background worktree creation', () => {
 
   it('does not reveal a workspace cancelled during post-create trust preflight', async () => {
     let resolveTrust!: () => void
-    const markTrusted = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveTrust = resolve
-        })
-    )
+    // Why: only the first call hangs. This window mock outlives the test, so a
+    // permanently-hanging mock would stall every later launch whose agent has a
+    // preflight preset.
+    const markTrusted = vi
+      .fn(async (): Promise<void> => undefined)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (resolveTrust = resolve)))
     globalThis.window = { api: { agentTrust: { markTrusted } } } as never
     store.repos = [{ id: 'repo-1', connectionId: null }]
     store.createWorktree.mockResolvedValueOnce({

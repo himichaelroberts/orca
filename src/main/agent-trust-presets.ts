@@ -1,17 +1,20 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
+import type { AgentTrustPreset } from '../shared/agent-trust-preset'
 import { writeFileAtomically } from './codex-accounts/fs-utils'
+import { ClaudeRuntimePathResolver } from './claude-accounts/runtime-paths'
 import { getOrcaManagedCodexHomePath } from './codex/codex-home-paths'
 import { upsertProjectTrustLevel } from './codex/config-toml-trust'
+import { runExclusivelyForAgentConfigFile } from './agent-config-mutation-queue'
 import { runExclusivelyForCodexTrustConfig } from './codex/codex-trust-config-mutation-queue'
 
-export type AgentTrustPreset = 'cursor' | 'copilot' | 'codex'
+export type { AgentTrustPreset }
 
 /**
- * Pre-mark a workspace as trusted for cursor-agent, GitHub Copilot CLI, or
- * Codex so the agent's "Do you trust this folder?" menu does not fire on
- * first launch.
+ * Pre-mark a workspace as trusted for cursor-agent, GitHub Copilot CLI,
+ * Codex, or Claude Code so the agent's "Do you trust this folder?" menu does
+ * not fire on first launch.
  *
  * Why: Orca's "drop URL into agent input as a draft" flow injects the URL
  * via bracketed-paste once the TUI is up. If the trust menu intercepts the
@@ -26,6 +29,9 @@ export type AgentTrustPreset = 'cursor' | 'copilot' | 'codex'
  * documented flag at all (verified against @github/copilot 1.0.32 bundle).
  * Codex's `--dangerously-bypass-approvals-and-sandbox` would also change
  * approval/sandbox policy, so it is not equivalent to "trust this project".
+ * Claude Code has no interactive flag either: `--print` skips the dialog but
+ * only in non-interactive mode, and `--permission-mode` /
+ * `--dangerously-skip-permissions` govern tool approvals, not workspace trust.
  */
 
 /**
@@ -124,6 +130,82 @@ export function markCodexProjectTrusted(workspacePath: string): Promise<void> {
       upsertProjectTrustLevel(runtimeTomlPath, absPath, 'trusted')
     })
   )
+}
+
+/**
+ * Claude Code keeps per-project trust in its config JSON under:
+ *   { "projects": { "<realpath>": { "hasTrustDialogAccepted": true } } }
+ *
+ * The config path is whatever the runtime resolver picks (CLAUDE_CONFIG_DIR,
+ * else a colocated ~/.claude/.claude.json, else ~/.claude.json), so trust
+ * lands in the file the launched agent will actually read.
+ *
+ * Only `hasTrustDialogAccepted` is written. The sibling
+ * `hasClaudeMdExternalIncludesApproved` flag is a separate consent about
+ * executing external CLAUDE.md includes, and granting it here would approve
+ * something the user never saw.
+ */
+export function markClaudeProjectTrusted(workspacePath: string): Promise<void> {
+  const absPath = canonicalize(workspacePath)
+  const { configPath } = new ClaudeRuntimePathResolver().getRuntimePaths()
+  // Why: the config holds live per-session counters every running Claude
+  // rewrites, so two concurrent worktree creations must not read-modify-write
+  // it at once and drop each other's entry.
+  return runExclusivelyForAgentConfigFile(configPath, async () => {
+    let config: Record<string, unknown> = {}
+    try {
+      if (existsSync(configPath)) {
+        const parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return
+        }
+        config = parsed as Record<string, unknown>
+      }
+    } catch {
+      // Why: this file carries the user's Claude auth and history. A parse
+      // failure means we cannot rewrite it without risking that data, and
+      // Claude rewrites it itself once the user accepts the prompt manually.
+      return
+    }
+    const projectsValue = config.projects
+    const projects =
+      projectsValue && typeof projectsValue === 'object' && !Array.isArray(projectsValue)
+        ? (projectsValue as Record<string, unknown>)
+        : {}
+    const existingEntry = projects[absPath]
+    const entry =
+      existingEntry && typeof existingEntry === 'object' && !Array.isArray(existingEntry)
+        ? (existingEntry as Record<string, unknown>)
+        : {}
+    if (entry.hasTrustDialogAccepted === true) {
+      return
+    }
+    projects[absPath] = { ...entry, hasTrustDialogAccepted: true }
+    config.projects = projects
+    mkdirSync(dirname(configPath), { recursive: true })
+    writeFileAtomically(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  })
+}
+
+/**
+ * Applies one local trust preset. Single dispatch so a newly added preset
+ * cannot light up in `TUI_AGENT_CONFIG` while silently doing nothing on one of
+ * the call paths that reads it.
+ */
+export async function applyLocalAgentTrustPreset(
+  preset: AgentTrustPreset,
+  workspacePath: string
+): Promise<void> {
+  if (preset === 'cursor') {
+    markCursorWorkspaceTrusted(workspacePath)
+  } else if (preset === 'copilot') {
+    markCopilotFolderTrusted(workspacePath)
+  } else if (preset === 'codex') {
+    // Why: the Codex write queues behind any in-flight hook grant, so the agent must not launch until it lands.
+    await markCodexProjectTrusted(workspacePath)
+  } else if (preset === 'claude') {
+    await markClaudeProjectTrusted(workspacePath)
+  }
 }
 
 function resolveCodexProjectTrustRoot(workspacePath: string): string {

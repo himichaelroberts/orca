@@ -38,8 +38,13 @@ vi.mock('node:os', async () => {
   }
 })
 
-const { markCodexProjectTrusted, markCopilotFolderTrusted, markCursorWorkspaceTrusted } =
-  await import('./agent-trust-presets')
+const {
+  applyLocalAgentTrustPreset,
+  markClaudeProjectTrusted,
+  markCodexProjectTrusted,
+  markCopilotFolderTrusted,
+  markCursorWorkspaceTrusted
+} = await import('./agent-trust-presets')
 const { runExclusivelyForCodexTrustConfig } =
   await import('./codex/codex-trust-config-mutation-queue')
 
@@ -299,6 +304,185 @@ describe('markCodexProjectTrusted', () => {
       expect(runtimeWritten).toContain('notes = "keep-runtime"')
       expect(runtimeWritten).toContain('trust_level = "trusted"')
       expect(runtimeWritten).not.toContain('trust_level = "untrusted"')
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('markClaudeProjectTrusted', () => {
+  function readConfig(configPath: string): {
+    projects: Record<string, Record<string, unknown>>
+    [key: string]: unknown
+  } {
+    return JSON.parse(readFileSync(configPath, 'utf-8'))
+  }
+
+  it('sets hasTrustDialogAccepted for the realpath in ~/.claude.json', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const realpath = realpathSync(workspace)
+    try {
+      await markClaudeProjectTrusted(workspace)
+      const configPath = join(testState.fakeHomeDir, '.claude.json')
+      expect(existsSync(configPath)).toBe(true)
+      const parsed = readConfig(configPath)
+      expect(parsed.projects[realpath].hasTrustDialogAccepted).toBe(true)
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves unrelated top-level keys, sibling projects, and the entry it edits', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const realpath = realpathSync(workspace)
+    const configPath = join(testState.fakeHomeDir, '.claude.json')
+    try {
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          oauthAccount: { emailAddress: 'someone@example.com' },
+          numStartups: 42,
+          projects: {
+            '/somewhere/else': { hasTrustDialogAccepted: true, lastCost: 1.5 },
+            [realpath]: { allowedTools: ['Bash'], hasTrustDialogAccepted: false }
+          }
+        })
+      )
+      await markClaudeProjectTrusted(workspace)
+      const parsed = readConfig(configPath)
+      expect(parsed.oauthAccount).toEqual({ emailAddress: 'someone@example.com' })
+      expect(parsed.numStartups).toBe(42)
+      expect(parsed.projects['/somewhere/else']).toEqual({
+        hasTrustDialogAccepted: true,
+        lastCost: 1.5
+      })
+      expect(parsed.projects[realpath]).toEqual({
+        allowedTools: ['Bash'],
+        hasTrustDialogAccepted: true
+      })
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('does not grant the separate external-includes consent', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const realpath = realpathSync(workspace)
+    try {
+      await markClaudeProjectTrusted(workspace)
+      const parsed = readConfig(join(testState.fakeHomeDir, '.claude.json'))
+      expect(parsed.projects[realpath]).toEqual({ hasTrustDialogAccepted: true })
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('is a no-op when trust is already accepted', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const configPath = join(testState.fakeHomeDir, '.claude.json')
+    try {
+      await markClaudeProjectTrusted(workspace)
+      const first = readFileSync(configPath, 'utf-8')
+      await markClaudeProjectTrusted(workspace)
+      expect(readFileSync(configPath, 'utf-8')).toBe(first)
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to rewrite a config it cannot parse', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const configPath = join(testState.fakeHomeDir, '.claude.json')
+    try {
+      writeFileSync(configPath, '{ this is not json')
+      await markClaudeProjectTrusted(workspace)
+      expect(readFileSync(configPath, 'utf-8')).toBe('{ this is not json')
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('writes the colocated ~/.claude/.claude.json when that is the config Claude reads', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const realpath = realpathSync(workspace)
+    const colocatedDir = join(testState.fakeHomeDir, '.claude')
+    const colocatedPath = join(colocatedDir, '.claude.json')
+    try {
+      mkdirSync(colocatedDir, { recursive: true })
+      writeFileSync(colocatedPath, JSON.stringify({ numStartups: 1 }))
+      await markClaudeProjectTrusted(workspace)
+      expect(readConfig(colocatedPath).projects[realpath].hasTrustDialogAccepted).toBe(true)
+      expect(existsSync(join(testState.fakeHomeDir, '.claude.json'))).toBe(false)
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('honors CLAUDE_CONFIG_DIR over the home fallback', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const realpath = realpathSync(workspace)
+    const configDir = mkdtempSync(join(tmpdir(), 'orca-claude-cfg-'))
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      await markClaudeProjectTrusted(workspace)
+      expect(
+        readConfig(join(configDir, '.claude.json')).projects[realpath].hasTrustDialogAccepted
+      ).toBe(true)
+      expect(existsSync(join(testState.fakeHomeDir, '.claude.json'))).toBe(false)
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previous
+      }
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('serializes concurrent writes so neither workspace entry is dropped', async () => {
+    const first = mkdtempSync(join(tmpdir(), 'orca-claude-ws-a-'))
+    const second = mkdtempSync(join(tmpdir(), 'orca-claude-ws-b-'))
+    try {
+      await Promise.all([markClaudeProjectTrusted(first), markClaudeProjectTrusted(second)])
+      const parsed = readConfig(join(testState.fakeHomeDir, '.claude.json'))
+      expect(parsed.projects[realpathSync(first)].hasTrustDialogAccepted).toBe(true)
+      expect(parsed.projects[realpathSync(second)].hasTrustDialogAccepted).toBe(true)
+    } finally {
+      rmSync(first, { recursive: true, force: true })
+      rmSync(second, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('applyLocalAgentTrustPreset', () => {
+  // Why: a preset added to TUI_AGENT_CONFIG but missing an arm here would fail
+  // silently at launch, which is exactly how Claude went unsupported.
+  it('has an arm for every preset in the union', async () => {
+    const presets = ['cursor', 'copilot', 'codex', 'claude'] as const
+    for (const preset of presets) {
+      const workspace = mkdtempSync(join(tmpdir(), `orca-preset-${preset}-`))
+      try {
+        await applyLocalAgentTrustPreset(preset, workspace)
+        expect(readdirSync(testState.fakeHomeDir).length).toBeGreaterThan(0)
+      } finally {
+        rmSync(workspace, { recursive: true, force: true })
+      }
+      rmSync(testState.fakeHomeDir, { recursive: true, force: true })
+      mkdirSync(testState.fakeHomeDir, { recursive: true })
+    }
+  })
+
+  it('routes the claude preset to the Claude config', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-preset-claude-'))
+    const realpath = realpathSync(workspace)
+    try {
+      await applyLocalAgentTrustPreset('claude', workspace)
+      const parsed = JSON.parse(
+        readFileSync(join(testState.fakeHomeDir, '.claude.json'), 'utf-8')
+      ) as { projects: Record<string, Record<string, unknown>> }
+      expect(parsed.projects[realpath].hasTrustDialogAccepted).toBe(true)
     } finally {
       rmSync(workspace, { recursive: true, force: true })
     }

@@ -26,6 +26,8 @@ export async function markRemoteAgentWorkspaceTrusted(args: {
     await markRemoteCursorWorkspaceTrusted(fsProvider, home, workspacePath)
   } else if (args.preset === 'copilot') {
     await markRemoteCopilotFolderTrusted(fsProvider, home, workspacePath)
+  } else if (args.preset === 'claude') {
+    await markRemoteClaudeProjectTrusted(fsProvider, home, workspacePath)
   }
 }
 
@@ -144,5 +146,49 @@ async function markRemoteCopilotFolderTrusted(
   }
   config.trustedFolders = [...existing.filter((entry) => typeof entry === 'string'), workspacePath]
   await fsProvider.createDir(configDir)
+  await fsProvider.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+}
+
+/**
+ * Remote mirror of `markClaudeProjectTrusted`. The local runtime resolver is
+ * not consulted: CLAUDE_CONFIG_DIR belongs to this desktop process, and the
+ * SSH-launched agent reads the remote user's own home.
+ */
+async function markRemoteClaudeProjectTrusted(
+  fsProvider: IFilesystemProvider,
+  remoteHome: string,
+  workspacePath: string
+): Promise<void> {
+  const configPath = `${remoteHome}/.claude.json`
+  const raw = await readRemoteTextFile(fsProvider, configPath)
+  let config: Record<string, unknown> = {}
+  if (raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return
+      }
+      config = parsed as Record<string, unknown>
+    } catch {
+      // Why: same as the local preset — this file holds the remote user's
+      // Claude auth and history, so a parse failure must not be overwritten.
+      return
+    }
+  }
+  const projectsValue = config.projects
+  const projects =
+    projectsValue && typeof projectsValue === 'object' && !Array.isArray(projectsValue)
+      ? (projectsValue as Record<string, unknown>)
+      : {}
+  const existingEntry = projects[workspacePath]
+  const entry =
+    existingEntry && typeof existingEntry === 'object' && !Array.isArray(existingEntry)
+      ? (existingEntry as Record<string, unknown>)
+      : {}
+  if (entry.hasTrustDialogAccepted === true) {
+    return
+  }
+  projects[workspacePath] = { ...entry, hasTrustDialogAccepted: true }
+  config.projects = projects
   await fsProvider.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
 }

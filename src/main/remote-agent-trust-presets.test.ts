@@ -28,6 +28,10 @@ function makeFsProvider(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function writeFileCalls(fsProvider: ReturnType<typeof makeFsProvider>): [string, string][] {
+  return fsProvider.writeFile.mock.calls as unknown as [string, string][]
+}
+
 describe('markRemoteAgentWorkspaceTrusted', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -153,6 +157,86 @@ describe('markRemoteAgentWorkspaceTrusted', () => {
 
     await markRemoteAgentWorkspaceTrusted({
       preset: 'codex',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(fsProvider.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('sets hasTrustDialogAccepted on the remote Claude config', async () => {
+    const fsProvider = makeFsProvider()
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(fsProvider.writeFile).toHaveBeenCalledTimes(1)
+    const [writtenPath, writtenBody] = writeFileCalls(fsProvider)[0]
+    expect(writtenPath).toBe('/home/u/.claude.json')
+    expect(JSON.parse(writtenBody)).toEqual({
+      projects: { '/real/repo/worktree': { hasTrustDialogAccepted: true } }
+    })
+  })
+
+  it('preserves the remote Claude config it did not author', async () => {
+    const fsProvider = makeFsProvider({
+      readFile: vi.fn(async () => ({
+        content: JSON.stringify({
+          oauthAccount: { emailAddress: 'someone@example.com' },
+          projects: { '/other': { hasTrustDialogAccepted: true } }
+        }),
+        isBinary: false
+      }))
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    const parsed = JSON.parse(writeFileCalls(fsProvider)[0][1]) as {
+      oauthAccount: unknown
+      projects: Record<string, unknown>
+    }
+    expect(parsed.oauthAccount).toEqual({ emailAddress: 'someone@example.com' })
+    expect(parsed.projects['/other']).toEqual({ hasTrustDialogAccepted: true })
+    expect(parsed.projects['/real/repo/worktree']).toEqual({ hasTrustDialogAccepted: true })
+  })
+
+  it('leaves an unparseable remote Claude config alone', async () => {
+    const fsProvider = makeFsProvider({
+      readFile: vi.fn(async () => ({ content: '{ not json', isBinary: false }))
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(fsProvider.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('skips the remote Claude write when trust is already accepted', async () => {
+    const fsProvider = makeFsProvider({
+      readFile: vi.fn(async () => ({
+        content: JSON.stringify({
+          projects: { '/real/repo/worktree': { hasTrustDialogAccepted: true } }
+        }),
+        isBinary: false
+      }))
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
       connectionId: 'ssh-1',
       workspacePath: '/repo/worktree'
     })

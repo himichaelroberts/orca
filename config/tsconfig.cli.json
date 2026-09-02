@@ -3,6 +3,7 @@
   "include": [
     "../src/cli/**/*",
     "../src/shared/**/*",
+    "../src/main/agent-config-mutation-queue.ts",
     "../src/main/agent-state-file-reader.ts",
     "../src/main/agent-hooks/hook-stdin-contract.ts",
     "../src/main/agent-hooks/hook-post-command.ts",
