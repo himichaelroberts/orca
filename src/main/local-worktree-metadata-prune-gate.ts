@@ -89,3 +89,15 @@ export function __resetLocalWorktreeMetadataPruneGateForTests(): void {
   observedGenerationByRepo.clear()
   listingFingerprintByRepo.clear()
 }
+
+/** Repo teardown: a full removal retires this repo's gate, and either shape can unpin rows in
+ *  other repos, so the shared inputs are always re-armed. */
+export function retireLocalWorktreeMetadataPruneStateForRepo(
+  repoId: string,
+  hostId: string | null
+): void {
+  if (hostId === null) {
+    forgetLocalWorktreeMetadataPruneGate(repoId)
+  }
+  invalidateLocalWorktreeMetadataPruneInputs()
+}
