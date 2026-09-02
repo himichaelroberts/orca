@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -463,6 +464,33 @@ describe('markClaudeProjectTrusted', () => {
       rmSync(second, { recursive: true, force: true })
     }
   })
+
+  // Why this exists despite passing against the pre-observe() implementation
+  // too: it does not discriminate observe() from the old try/catch — both abort
+  // — it pins the *branch*, so a future refactor that reverts to seeding an
+  // empty config on a failed read fails here instead of destroying the file.
+  // chmod 000 does not remove read access for root, and on Windows Node's
+  // chmod only toggles the read-only flag, so the unreadable state cannot be
+  // set up there.
+  const canMakeFileUnreadable = process.platform !== 'win32' && process.getuid?.() !== 0
+  it.skipIf(!canMakeFileUnreadable)(
+    'leaves a present-but-unreadable config untouched',
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+      const configPath = join(testState.fakeHomeDir, '.claude.json')
+      const live = JSON.stringify({ oauthAccount: { emailAddress: 'someone@example.com' } })
+      try {
+        writeFileSync(configPath, live)
+        chmodSync(configPath, 0o000)
+        await markClaudeProjectTrusted(workspace)
+        chmodSync(configPath, 0o600)
+        // The directory is writable, so a seed-empty regression would land here.
+        expect(readFileSync(configPath, 'utf-8')).toBe(live)
+      } finally {
+        rmSync(workspace, { recursive: true, force: true })
+      }
+    }
+  )
 
   it('uses a padded CLAUDE_CONFIG_DIR verbatim rather than trimming the path', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
