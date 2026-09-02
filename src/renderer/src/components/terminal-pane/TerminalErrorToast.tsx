@@ -32,6 +32,13 @@ const UNREATTACHABLE_SESSION_SOURCES = [
   'SSH_SESSION_EXPIRED:[ \\t]*\\S*(?:[ \\t]+SSH_PTY_IDENTITY_MISMATCH)?',
   'PTY "[^"\\r\\n]*" not found(?: \\(identity mismatch\\))?'
 ]
+// The relay answered and proved the shell is still running — only its output delivery was retired.
+// Deliberately NOT one of the sources above: that copy says to open a new terminal, which here
+// abandons a live agent. Same lastIndex hazard, so keep the test and replace forms separate.
+const SOURCE_RESTORE_REQUIRED_SOURCE =
+  'SSH_PTY_SOURCE_RESTORE_REQUIRED(?::[ \\t]*\\S*(?:[ \\t]+\\S+)?)?'
+const SOURCE_RESTORE_REQUIRED_PATTERN = new RegExp(SOURCE_RESTORE_REQUIRED_SOURCE)
+const SOURCE_RESTORE_REQUIRED_REPLACE_PATTERN = new RegExp(SOURCE_RESTORE_REQUIRED_SOURCE, 'g')
 const UNREATTACHABLE_SESSION_PATTERNS = UNREATTACHABLE_SESSION_SOURCES.map(
   (source) => new RegExp(source)
 )
@@ -74,6 +81,7 @@ export function isExplainedTerminalError(error: string): boolean {
       (line) =>
         TERMINAL_HOST_GONE_PATTERN.test(line) ||
         LEGACY_TERMINAL_HOST_GONE_PATTERN.test(line) ||
+        SOURCE_RESTORE_REQUIRED_PATTERN.test(line) ||
         UNREATTACHABLE_SESSION_PATTERNS.some((pattern) => pattern.test(line))
     )
 }
@@ -102,6 +110,12 @@ export function humanizeTerminalError(error: string): string {
       )
     )
   }
+  humanized = humanized.replace(SOURCE_RESTORE_REQUIRED_REPLACE_PATTERN, () =>
+    translate(
+      'auto.components.terminal.pane.TerminalErrorToast.sourceRestoring',
+      'Reconnecting this terminal — its output is being re-established. The session is still running.'
+    )
+  )
   humanized = humanizeUnreattachableSession(humanized)
   if (!isExplainedTerminalError(humanized)) {
     return humanized
