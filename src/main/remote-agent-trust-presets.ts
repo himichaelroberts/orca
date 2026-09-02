@@ -1,4 +1,5 @@
 import type { AgentTrustPreset } from './agent-trust-presets'
+import { runExclusivelyForAgentConfigFile } from './agent-config-mutation-queue'
 import { upsertProjectTrustLevelInContent } from './codex/config-toml-trust'
 import { getActiveMultiplexer } from './ssh/ssh-target-registry'
 import { getSshFilesystemProvider } from './providers/ssh-filesystem-dispatch'
@@ -27,7 +28,7 @@ export async function markRemoteAgentWorkspaceTrusted(args: {
   } else if (args.preset === 'copilot') {
     await markRemoteCopilotFolderTrusted(fsProvider, home, workspacePath)
   } else if (args.preset === 'claude') {
-    await markRemoteClaudeProjectTrusted(fsProvider, home, workspacePath)
+    await markRemoteClaudeProjectTrusted(fsProvider, home, workspacePath, args.connectionId)
   }
 }
 
@@ -157,38 +158,104 @@ async function markRemoteCopilotFolderTrusted(
 async function markRemoteClaudeProjectTrusted(
   fsProvider: IFilesystemProvider,
   remoteHome: string,
-  workspacePath: string
+  workspacePath: string,
+  connectionId: string
 ): Promise<void> {
-  const configPath = `${remoteHome}/.claude.json`
-  const raw = await readRemoteTextFile(fsProvider, configPath)
-  let config: Record<string, unknown> = {}
-  if (raw.trim()) {
-    try {
-      const parsed = JSON.parse(raw)
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return
-      }
-      config = parsed as Record<string, unknown>
-    } catch {
-      // Why: same as the local preset — this file holds the remote user's
-      // Claude auth and history, so a parse failure must not be overwritten.
+  const configPath = await resolveRemoteClaudeConfigPath(fsProvider, remoteHome)
+  // Why: this is a read-modify-write of a file that carries the remote user's
+  // auth, history, and every other project entry. Two workspace creations on
+  // one host would otherwise write stale snapshots and drop each other's trust
+  // entry, leaving that launch still facing the dialog. Keyed by host so
+  // separate connections do not serialize against each other.
+  return runExclusivelyForAgentConfigFile(`${connectionId}\u0000${configPath}`, async () => {
+    const existing = await readRemoteClaudeConfig(fsProvider, configPath)
+    if (existing === 'unreadable') {
       return
     }
+    const config = existing
+    const projectsValue = config.projects
+    const projects =
+      projectsValue && typeof projectsValue === 'object' && !Array.isArray(projectsValue)
+        ? (projectsValue as Record<string, unknown>)
+        : {}
+    const existingEntry = projects[workspacePath]
+    const entry =
+      existingEntry && typeof existingEntry === 'object' && !Array.isArray(existingEntry)
+        ? (existingEntry as Record<string, unknown>)
+        : {}
+    if (entry.hasTrustDialogAccepted === true) {
+      return
+    }
+    projects[workspacePath] = { ...entry, hasTrustDialogAccepted: true }
+    config.projects = projects
+    await fsProvider.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  })
+}
+
+/**
+ * Reads the remote Claude config, separating "no config yet" from "there is one
+ * and we could not read it".
+ *
+ * Why: `readRemoteTextFile` flattens a transport error, a permission denial,
+ * and a binary result all into `''`, which is indistinguishable from an absent
+ * file. Treating that as empty and writing would replace a live config —
+ * discarding the remote user's Claude credentials, history, and MCP servers.
+ * Probe existence first and refuse to write over anything we cannot parse.
+ */
+async function readRemoteClaudeConfig(
+  fsProvider: IFilesystemProvider,
+  configPath: string
+): Promise<Record<string, unknown> | 'unreadable'> {
+  let exists = true
+  try {
+    await fsProvider.stat(configPath)
+  } catch {
+    exists = false
   }
-  const projectsValue = config.projects
-  const projects =
-    projectsValue && typeof projectsValue === 'object' && !Array.isArray(projectsValue)
-      ? (projectsValue as Record<string, unknown>)
-      : {}
-  const existingEntry = projects[workspacePath]
-  const entry =
-    existingEntry && typeof existingEntry === 'object' && !Array.isArray(existingEntry)
-      ? (existingEntry as Record<string, unknown>)
-      : {}
-  if (entry.hasTrustDialogAccepted === true) {
-    return
+  if (!exists) {
+    return {}
   }
-  projects[workspacePath] = { ...entry, hasTrustDialogAccepted: true }
-  config.projects = projects
-  await fsProvider.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  let content: string
+  try {
+    const result = await fsProvider.readFile(configPath)
+    if (result.isBinary) {
+      return 'unreadable'
+    }
+    content = result.content
+  } catch {
+    return 'unreadable'
+  }
+  if (!content.trim()) {
+    // An empty file has nothing to lose.
+    return {}
+  }
+  try {
+    const parsed = JSON.parse(content)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return 'unreadable'
+    }
+    return parsed as Record<string, unknown>
+  } catch {
+    return 'unreadable'
+  }
+}
+
+/**
+ * Mirrors `resolveConfigPath`: Claude reads a colocated
+ * `<home>/.claude/.claude.json` when that file exists, else `<home>/.claude.json`.
+ * Probed on the remote host, because the fallback is a filesystem condition
+ * there and not something this desktop process can infer. `CLAUDE_CONFIG_DIR`
+ * stays out of scope — it belongs to this process, not the SSH host.
+ */
+async function resolveRemoteClaudeConfigPath(
+  fsProvider: IFilesystemProvider,
+  remoteHome: string
+): Promise<string> {
+  const colocated = `${remoteHome}/.claude/.claude.json`
+  try {
+    await fsProvider.stat(colocated)
+    return colocated
+  } catch {
+    return `${remoteHome}/.claude.json`
+  }
 }

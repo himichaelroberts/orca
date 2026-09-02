@@ -11,8 +11,10 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentTrustPreset } from '../shared/agent-trust-preset'
 
 const testState = {
+  launchConfigDir: undefined as string | undefined,
   fakeHomeDir: '',
   userDataDir: '',
   previousUserDataPath: undefined as string | undefined
@@ -27,6 +29,12 @@ vi.mock('electron', () => ({
       throw new Error(`unexpected app.getPath(${name})`)
     }
   }
+}))
+
+// Why: the real resolver spawns a profile-loading shell; tests must not.
+vi.mock('./startup/login-shell-environment', () => ({
+  resolveLoginShellEnvironment: async (): Promise<Record<string, string>> =>
+    testState.launchConfigDir ? { CLAUDE_CONFIG_DIR: testState.launchConfigDir } : {}
 }))
 
 vi.mock('node:os', async () => {
@@ -49,6 +57,7 @@ const { runExclusivelyForCodexTrustConfig } =
   await import('./codex/codex-trust-config-mutation-queue')
 
 beforeEach(() => {
+  testState.launchConfigDir = undefined
   testState.fakeHomeDir = mkdtempSync(join(tmpdir(), 'orca-trust-presets-'))
   testState.userDataDir = mkdtempSync(join(tmpdir(), 'orca-trust-presets-user-data-'))
   testState.previousUserDataPath = process.env.ORCA_USER_DATA_PATH
@@ -454,25 +463,51 @@ describe('markClaudeProjectTrusted', () => {
       rmSync(second, { recursive: true, force: true })
     }
   })
+
+  it('targets the config dir the launched shell exports, not this process env', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const realpath = realpathSync(workspace)
+    const launchDir = mkdtempSync(join(tmpdir(), 'orca-claude-launch-'))
+    try {
+      // A GUI-launched Electron never sourced the user's rc files, so the PTY's
+      // CLAUDE_CONFIG_DIR is the authoritative one.
+      testState.launchConfigDir = launchDir
+      await markClaudeProjectTrusted(workspace)
+      expect(
+        readConfig(join(launchDir, '.claude.json')).projects[realpath].hasTrustDialogAccepted
+      ).toBe(true)
+      expect(existsSync(join(testState.fakeHomeDir, '.claude.json'))).toBe(false)
+    } finally {
+      rmSync(launchDir, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('applyLocalAgentTrustPreset', () => {
-  // Why: a preset added to TUI_AGENT_CONFIG but missing an arm here would fail
-  // silently at launch, which is exactly how Claude went unsupported.
-  it('has an arm for every preset in the union', async () => {
-    const presets = ['cursor', 'copilot', 'codex', 'claude'] as const
-    for (const preset of presets) {
+  // Why a Record over the union rather than a hardcoded list: adding a preset
+  // must break THIS file too, otherwise the test keeps passing while the new
+  // preset silently writes nothing. The artifact per preset is asserted
+  // explicitly — "some file landed in home" would pass on the wrong write.
+  const EXPECTED_ARTIFACT: Record<AgentTrustPreset, (home: string) => string> = {
+    cursor: (home) => join(home, '.cursor', 'projects'),
+    copilot: (home) => join(home, '.copilot', 'config.json'),
+    codex: (home) => join(home, '.codex', 'config.toml'),
+    claude: (home) => join(home, '.claude.json')
+  }
+
+  it.each(Object.keys(EXPECTED_ARTIFACT) as AgentTrustPreset[])(
+    'writes the %s artifact through the shared dispatch',
+    async (preset) => {
       const workspace = mkdtempSync(join(tmpdir(), `orca-preset-${preset}-`))
       try {
         await applyLocalAgentTrustPreset(preset, workspace)
-        expect(readdirSync(testState.fakeHomeDir).length).toBeGreaterThan(0)
+        expect(existsSync(EXPECTED_ARTIFACT[preset](testState.fakeHomeDir))).toBe(true)
       } finally {
         rmSync(workspace, { recursive: true, force: true })
       }
-      rmSync(testState.fakeHomeDir, { recursive: true, force: true })
-      mkdirSync(testState.fakeHomeDir, { recursive: true })
     }
-  })
+  )
 
   it('routes the claude preset to the Claude config', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'orca-preset-claude-'))

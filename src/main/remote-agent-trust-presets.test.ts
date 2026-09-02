@@ -28,6 +28,16 @@ function makeFsProvider(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** stat that reports only the listed paths as present, like a real host. */
+function statOnly(paths: string[]) {
+  return vi.fn(async (path: string) => {
+    if (paths.includes(path)) {
+      return {} as never
+    }
+    throw new Error('missing')
+  })
+}
+
 function writeFileCalls(fsProvider: ReturnType<typeof makeFsProvider>): [string, string][] {
   return fsProvider.writeFile.mock.calls as unknown as [string, string][]
 }
@@ -184,6 +194,7 @@ describe('markRemoteAgentWorkspaceTrusted', () => {
 
   it('preserves the remote Claude config it did not author', async () => {
     const fsProvider = makeFsProvider({
+      stat: statOnly(['/home/u/.claude.json']),
       readFile: vi.fn(async () => ({
         content: JSON.stringify({
           oauthAccount: { emailAddress: 'someone@example.com' },
@@ -211,6 +222,7 @@ describe('markRemoteAgentWorkspaceTrusted', () => {
 
   it('leaves an unparseable remote Claude config alone', async () => {
     const fsProvider = makeFsProvider({
+      stat: statOnly(['/home/u/.claude.json']),
       readFile: vi.fn(async () => ({ content: '{ not json', isBinary: false }))
     })
     mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
@@ -226,6 +238,7 @@ describe('markRemoteAgentWorkspaceTrusted', () => {
 
   it('skips the remote Claude write when trust is already accepted', async () => {
     const fsProvider = makeFsProvider({
+      stat: statOnly(['/home/u/.claude.json']),
       readFile: vi.fn(async () => ({
         content: JSON.stringify({
           projects: { '/real/repo/worktree': { hasTrustDialogAccepted: true } }
@@ -242,5 +255,99 @@ describe('markRemoteAgentWorkspaceTrusted', () => {
     })
 
     expect(fsProvider.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('never overwrites a remote Claude config it could not read', async () => {
+    // stat succeeds (the file is there) but the read fails — a transport or
+    // permission error. Writing here would discard the remote user's auth.
+    const fsProvider = makeFsProvider({
+      stat: statOnly(['/home/u/.claude.json']),
+      readFile: vi.fn(async () => {
+        throw new Error('transport reset')
+      })
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(fsProvider.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('never overwrites a remote Claude config that reads as binary', async () => {
+    const fsProvider = makeFsProvider({
+      stat: statOnly(['/home/u/.claude.json']),
+      readFile: vi.fn(async () => ({ content: '', isBinary: true }))
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(fsProvider.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('prefers the remote colocated config when the host has one', async () => {
+    // Mirrors resolveConfigPath: a colocated ~/.claude/.claude.json wins when
+    // it exists, and that is a filesystem condition only the host knows.
+    const fsProvider = makeFsProvider({
+      stat: statOnly(['/home/u/.claude/.claude.json']),
+      readFile: vi.fn(async () => ({ content: '', isBinary: false }))
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await markRemoteAgentWorkspaceTrusted({
+      preset: 'claude',
+      connectionId: 'ssh-1',
+      workspacePath: '/repo/worktree'
+    })
+
+    expect(writeFileCalls(fsProvider)[0][0]).toBe('/home/u/.claude/.claude.json')
+  })
+
+  it('serializes concurrent Claude writes on one host so neither entry is lost', async () => {
+    const store = new Map<string, string>()
+    const fsProvider = makeFsProvider({
+      stat: vi.fn(async (path: string) => {
+        if (store.has(path)) {
+          return {} as never
+        }
+        throw new Error('missing')
+      }),
+      readFile: vi.fn(async (path: string) => {
+        // Yield between read and write so an unserialized pair interleaves.
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return { content: store.get(path) ?? '', isBinary: false }
+      }),
+      writeFile: vi.fn(async (path: string, body: string) => {
+        store.set(path, body)
+      })
+    })
+    mocks.getSshFilesystemProvider.mockReturnValue(fsProvider)
+
+    await Promise.all([
+      markRemoteAgentWorkspaceTrusted({
+        preset: 'claude',
+        connectionId: 'ssh-1',
+        workspacePath: '/repo/a'
+      }),
+      markRemoteAgentWorkspaceTrusted({
+        preset: 'claude',
+        connectionId: 'ssh-1',
+        workspacePath: '/repo/b'
+      })
+    ])
+
+    const parsed = JSON.parse(store.get('/home/u/.claude.json') ?? '{}') as {
+      projects: Record<string, unknown>
+    }
+    expect(parsed.projects['/real/repo/a']).toEqual({ hasTrustDialogAccepted: true })
+    expect(parsed.projects['/real/repo/b']).toEqual({ hasTrustDialogAccepted: true })
   })
 })

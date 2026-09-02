@@ -226,6 +226,7 @@ export {
   applyAgentStatusHooksEnabledMock,
   detectInstalledAgentsWithShellPathHydrationMock,
   detectRemoteAgentsMock,
+  markClaudeProjectTrustedMock,
   markCodexProjectTrustedMock,
   markCopilotFolderTrustedMock,
   markCursorWorkspaceTrustedMock,

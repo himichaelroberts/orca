@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import type { AgentTrustPreset } from '../shared/agent-trust-preset'
 import { writeFileAtomically } from './codex-accounts/fs-utils'
 import { ClaudeRuntimePathResolver } from './claude-accounts/runtime-paths'
+import { resolveLoginShellEnvironment } from './startup/login-shell-environment'
 import { getOrcaManagedCodexHomePath } from './codex/codex-home-paths'
 import { upsertProjectTrustLevel } from './codex/config-toml-trust'
 import { runExclusivelyForAgentConfigFile } from './agent-config-mutation-queue'
@@ -133,6 +134,30 @@ export function markCodexProjectTrusted(workspacePath: string): Promise<void> {
 }
 
 /**
+ * The config path the *launched* Claude will read.
+ *
+ * Why not just the runtime resolver: it reads this process's
+ * `CLAUDE_CONFIG_DIR`, but agents run in a PTY whose profile-loading shell may
+ * export a different one — a GUI-launched Electron never sourced those rc
+ * files, so the two disagree exactly when the user sets it in their shell. The
+ * write would then land in a file the session never opens and the dialog would
+ * still fire, silently. Falls back to the resolver on any failure, which is the
+ * pre-existing behavior.
+ */
+async function resolveClaudeLaunchConfigPath(): Promise<string> {
+  try {
+    const launchEnv = await resolveLoginShellEnvironment()
+    const launchConfigDir = launchEnv.CLAUDE_CONFIG_DIR?.trim()
+    if (launchConfigDir) {
+      return join(launchConfigDir, '.claude.json')
+    }
+  } catch {
+    // Fall through to the process-env resolver.
+  }
+  return new ClaudeRuntimePathResolver().getRuntimePaths().configPath
+}
+
+/**
  * Claude Code keeps per-project trust in its config JSON under:
  *   { "projects": { "<realpath>": { "hasTrustDialogAccepted": true } } }
  *
@@ -145,9 +170,9 @@ export function markCodexProjectTrusted(workspacePath: string): Promise<void> {
  * executing external CLAUDE.md includes, and granting it here would approve
  * something the user never saw.
  */
-export function markClaudeProjectTrusted(workspacePath: string): Promise<void> {
+export async function markClaudeProjectTrusted(workspacePath: string): Promise<void> {
   const absPath = canonicalize(workspacePath)
-  const { configPath } = new ClaudeRuntimePathResolver().getRuntimePaths()
+  const configPath = await resolveClaudeLaunchConfigPath()
   // Why: the config holds live per-session counters every running Claude
   // rewrites, so two concurrent worktree creations must not read-modify-write
   // it at once and drop each other's entry.
@@ -188,24 +213,28 @@ export function markClaudeProjectTrusted(workspacePath: string): Promise<void> {
 }
 
 /**
- * Applies one local trust preset. Single dispatch so a newly added preset
- * cannot light up in `TUI_AGENT_CONFIG` while silently doing nothing on one of
- * the call paths that reads it.
+ * One writer per preset, so the local dispatch has a single source of truth.
+ *
+ * Why `satisfies Record<AgentTrustPreset, …>`: a preset added to the union
+ * fails to compile here (TS2741) instead of silently doing nothing at launch —
+ * which is exactly how Claude went unsupported. Note the repo's oxlint
+ * `switch-exhaustiveness-check` is not type-aware across modules, so a bare
+ * switch would NOT have caught it.
  */
+const LOCAL_TRUST_PRESET_WRITERS = {
+  cursor: async (workspacePath: string) => markCursorWorkspaceTrusted(workspacePath),
+  copilot: async (workspacePath: string) => markCopilotFolderTrusted(workspacePath),
+  // Why: the Codex write queues behind any in-flight hook grant, so the agent must not launch until it lands.
+  codex: (workspacePath: string) => markCodexProjectTrusted(workspacePath),
+  claude: (workspacePath: string) => markClaudeProjectTrusted(workspacePath)
+} satisfies Record<AgentTrustPreset, (workspacePath: string) => Promise<void>>
+
+/** Applies one local trust preset. */
 export async function applyLocalAgentTrustPreset(
   preset: AgentTrustPreset,
   workspacePath: string
 ): Promise<void> {
-  if (preset === 'cursor') {
-    markCursorWorkspaceTrusted(workspacePath)
-  } else if (preset === 'copilot') {
-    markCopilotFolderTrusted(workspacePath)
-  } else if (preset === 'codex') {
-    // Why: the Codex write queues behind any in-flight hook grant, so the agent must not launch until it lands.
-    await markCodexProjectTrusted(workspacePath)
-  } else if (preset === 'claude') {
-    await markClaudeProjectTrusted(workspacePath)
-  }
+  await LOCAL_TRUST_PRESET_WRITERS[preset](workspacePath)
 }
 
 function resolveCodexProjectTrustRoot(workspacePath: string): string {

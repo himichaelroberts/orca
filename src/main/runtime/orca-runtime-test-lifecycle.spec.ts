@@ -36,7 +36,12 @@ const {
   listWorktrees,
   listWorktreesSharedStrict
 } = mocks
-const { listWorktreesStrict, loadHooks, markCodexProjectTrustedMock } = mocks
+const {
+  listWorktreesStrict,
+  loadHooks,
+  markClaudeProjectTrustedMock,
+  markCodexProjectTrustedMock
+} = mocks
 const { markCopilotFolderTrustedMock, markCursorWorkspaceTrustedMock, mergeGitHubPRMock } = mocks
 const { mergeGitLabMRMock, muxRequestMock, parseOrcaYaml, prepareLocalWorktreeRootForRepoMock } =
   mocks
@@ -269,6 +274,7 @@ function resetRuntimeTestMocks(): void {
   detectInstalledAgentsWithShellPathHydrationMock.mockResolvedValue([])
   detectRemoteAgentsMock.mockReset()
   detectRemoteAgentsMock.mockResolvedValue([])
+  markClaudeProjectTrustedMock.mockReset()
   markCodexProjectTrustedMock.mockReset()
   markCopilotFolderTrustedMock.mockReset()
   markCursorWorkspaceTrustedMock.mockReset()

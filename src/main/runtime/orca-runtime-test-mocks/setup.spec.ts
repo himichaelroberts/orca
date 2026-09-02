@@ -163,6 +163,7 @@ const {
   applyAgentStatusHooksEnabledMock,
   detectInstalledAgentsWithShellPathHydrationMock,
   detectRemoteAgentsMock,
+  markClaudeProjectTrustedMock,
   markCodexProjectTrustedMock,
   markCopilotFolderTrustedMock,
   markCursorWorkspaceTrustedMock,
@@ -274,6 +275,7 @@ const {
     applyAgentStatusHooksEnabledMock: vi.fn() as TestMock,
     detectInstalledAgentsWithShellPathHydrationMock: vi.fn() as TestMock,
     detectRemoteAgentsMock: vi.fn() as TestMock,
+    markClaudeProjectTrustedMock: vi.fn() as TestMock,
     markCodexProjectTrustedMock: vi.fn() as TestMock,
     markCopilotFolderTrustedMock: vi.fn() as TestMock,
     markCursorWorkspaceTrustedMock: vi.fn() as TestMock,
@@ -358,9 +360,20 @@ vi.mock('../../agent-hooks/managed-agent-hook-controls', () => ({
 }))
 
 vi.mock('../../agent-trust-presets', () => ({
+  markClaudeProjectTrusted: markClaudeProjectTrustedMock,
   markCodexProjectTrusted: markCodexProjectTrustedMock,
   markCopilotFolderTrusted: markCopilotFolderTrustedMock,
-  markCursorWorkspaceTrusted: markCursorWorkspaceTrustedMock
+  markCursorWorkspaceTrusted: markCursorWorkspaceTrustedMock,
+  // Why: the runtime dispatches through applyLocalAgentTrustPreset now. Delegate
+  // to the per-preset mocks so the existing artifact and call-order assertions
+  // keep testing what they were written to test.
+  applyLocalAgentTrustPreset: (preset: string, workspacePath: string) =>
+    ({
+      claude: markClaudeProjectTrustedMock,
+      codex: markCodexProjectTrustedMock,
+      copilot: markCopilotFolderTrustedMock,
+      cursor: markCursorWorkspaceTrustedMock
+    })[preset]?.(workspacePath)
 }))
 
 vi.mock('../../hooks', () => ({
@@ -632,6 +645,7 @@ export {
   applyAgentStatusHooksEnabledMock,
   detectInstalledAgentsWithShellPathHydrationMock,
   detectRemoteAgentsMock,
+  markClaudeProjectTrustedMock,
   markCodexProjectTrustedMock,
   markCopilotFolderTrustedMock,
   markCursorWorkspaceTrustedMock,
