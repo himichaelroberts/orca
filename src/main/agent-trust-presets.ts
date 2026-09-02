@@ -148,8 +148,11 @@ export function markCodexProjectTrusted(workspacePath: string): Promise<void> {
 async function resolveClaudeLaunchConfigPath(): Promise<string> {
   try {
     const launchEnv = await resolveLoginShellEnvironment()
-    const launchConfigDir = launchEnv.CLAUDE_CONFIG_DIR?.trim()
-    if (launchConfigDir) {
+    // Why trim only the emptiness test: a directory name may legally carry
+    // leading or trailing spaces, and Claude reads the raw env value — trimming
+    // the path itself would send this write to a file the session never opens.
+    const launchConfigDir = launchEnv.CLAUDE_CONFIG_DIR
+    if (launchConfigDir?.trim()) {
       return join(launchConfigDir, '.claude.json')
     }
   } catch {

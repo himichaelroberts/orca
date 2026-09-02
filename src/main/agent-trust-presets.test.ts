@@ -464,6 +464,24 @@ describe('markClaudeProjectTrusted', () => {
     }
   })
 
+  it('uses a padded CLAUDE_CONFIG_DIR verbatim rather than trimming the path', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
+    const realpath = realpathSync(workspace)
+    // A directory name may legally end in a space; Claude reads the raw value.
+    const padded = `${mkdtempSync(join(tmpdir(), 'orca-claude-pad-'))} `
+    mkdirSync(padded, { recursive: true })
+    try {
+      testState.launchConfigDir = padded
+      await markClaudeProjectTrusted(workspace)
+      expect(
+        readConfig(join(padded, '.claude.json')).projects[realpath].hasTrustDialogAccepted
+      ).toBe(true)
+    } finally {
+      rmSync(padded, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('targets the config dir the launched shell exports, not this process env', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'orca-claude-ws-'))
     const realpath = realpathSync(workspace)
