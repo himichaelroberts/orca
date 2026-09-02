@@ -1,5 +1,6 @@
 import type { AgentTrustPreset } from '../../shared/agent-trust-preset'
 import { ipcRenderer } from 'electron'
+import type { PreloadApi } from '../api-types'
 
 export const agentTrustApi = {
   markTrusted: (args: {
@@ -7,4 +8,4 @@ export const agentTrustApi = {
     workspacePath: string
     connectionId?: string
   }): Promise<void> => ipcRenderer.invoke('agentTrust:markTrusted', args)
-}
+} satisfies PreloadApi['agentTrust']
