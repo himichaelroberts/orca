@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import type { AgentTrustPreset } from '../shared/agent-trust-preset'
 import { writeFileAtomically } from './codex-accounts/fs-utils'
 import { ClaudeRuntimePathResolver } from './claude-accounts/runtime-paths'
+import { observe } from './codex/codex-path-observation'
 import { resolveLoginShellEnvironment } from './startup/login-shell-environment'
 import { getOrcaManagedCodexHomePath } from './codex/codex-home-paths'
 import { upsertProjectTrustLevel } from './codex/config-toml-trust'
@@ -177,20 +178,29 @@ export async function markClaudeProjectTrusted(workspacePath: string): Promise<v
   // rewrites, so two concurrent worktree creations must not read-modify-write
   // it at once and drop each other's entry.
   return runExclusivelyForAgentConfigFile(configPath, async () => {
-    let config: Record<string, unknown> = {}
-    try {
-      if (existsSync(configPath)) {
-        const parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          return
-        }
-        config = parsed as Record<string, unknown>
-      }
-    } catch {
-      // Why: this file carries the user's Claude auth and history. A parse
-      // failure means we cannot rewrite it without risking that data, and
-      // Claude rewrites it itself once the user accepts the prompt manually.
+    // Why observe() and not existsSync: existsSync answers false for EACCES,
+    // EPERM, EIO and every unrecognised errno as readily as for ENOENT, so an
+    // unreadable config would look like "no config yet" and be replaced —
+    // taking the user's Claude auth, history, and MCP servers with it. One call
+    // also closes the TOCTOU window the existsSync + read pair opened.
+    const observation = observe(() => readFileSync(configPath, 'utf-8'))
+    if (observation.kind === 'indeterminate') {
       return
+    }
+    let config: Record<string, unknown> = {}
+    if (observation.kind === 'present') {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(observation.value)
+      } catch {
+        // Why: a config we cannot parse is the user's to fix. Claude rewrites
+        // it itself once the trust prompt is accepted manually.
+        return
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return
+      }
+      config = parsed as Record<string, unknown>
     }
     const projectsValue = config.projects
     const projects =

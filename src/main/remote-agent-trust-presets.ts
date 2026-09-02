@@ -217,6 +217,11 @@ async function readRemoteClaudeConfig(
     // transport resets and permission denials, and reading "couldn't check" as
     // "absent" is what would overwrite a live config — the exact failure this
     // function exists to prevent.
+    //
+    // Why not `isDefinitiveAbsence` like the local arm: an error raised on the
+    // SSH host crosses the relay and is rebuilt with the TRANSPORT's numeric
+    // code, so a code-only predicate reads a genuine remote ENOENT as
+    // indeterminate and this preset would never write on SSH at all.
     return isENOENT(error) ? {} : 'unreadable'
   }
   let content: string
