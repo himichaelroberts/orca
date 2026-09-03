@@ -1,22 +1,136 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { Repo } from '../../shared/repo-types'
 
 const mocks = vi.hoisted(() => ({
-  applyLocalAgentTrustPreset: vi.fn()
+  markClaudeProjectTrusted: vi.fn(),
+  markCodexProjectTrusted: vi.fn(),
+  markCopilotFolderTrusted: vi.fn(),
+  markCursorWorkspaceTrusted: vi.fn(),
+  detectRemoteAgents: vi.fn(),
+  detectInstalledAgentsWithShellPathHydration: vi.fn()
 }))
 
-vi.mock('../agent-trust-presets', () => mocks)
+vi.mock('../agent-trust-presets', () => ({
+  markClaudeProjectTrusted: mocks.markClaudeProjectTrusted,
+  markCodexProjectTrusted: mocks.markCodexProjectTrusted,
+  markCopilotFolderTrusted: mocks.markCopilotFolderTrusted,
+  markCursorWorkspaceTrusted: mocks.markCursorWorkspaceTrusted,
+  // Why: markLocalWorktreeTrusted dispatches through applyLocalAgentTrustPreset
+  // now. Delegate to the per-preset mocks so the await and rejection contracts
+  // below keep testing what they were written to test.
+  applyLocalAgentTrustPreset: (preset: string, workspacePath: string) =>
+    ({
+      claude: mocks.markClaudeProjectTrusted,
+      codex: mocks.markCodexProjectTrusted,
+      copilot: mocks.markCopilotFolderTrusted,
+      cursor: mocks.markCursorWorkspaceTrusted
+    })[preset]?.(workspacePath)
+}))
 
-import { markLocalWorktreeTrusted } from './runtime-worktree-agent-startup'
+vi.mock('../preflight/agent-detection', () => ({
+  detectRemoteAgents: mocks.detectRemoteAgents,
+  detectInstalledAgentsWithShellPathHydration: mocks.detectInstalledAgentsWithShellPathHydration
+}))
 
-describe('markLocalWorktreeTrusted', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mocks.applyLocalAgentTrustPreset.mockResolvedValue(undefined)
+import {
+  buildWorktreeStartupForAgent,
+  buildWorktreeStartupForDraft,
+  markLocalWorktreeTrusted
+} from './runtime-worktree-agent-startup'
+
+function makeRepo(fields: Partial<Repo>): Repo {
+  return {
+    id: 'repo-1',
+    name: 'repo',
+    path: '/srv/repo',
+    connectionId: null,
+    executionHostId: null,
+    ...fields
+  } as Repo
+}
+
+const settings = {
+  agentCmdOverrides: {},
+  agentDefaultArgs: {},
+  agentDefaultEnv: {},
+  disabledTuiAgents: [],
+  defaultTuiAgent: undefined,
+  terminalWindowsShell: null
+} as never
+
+/** The launched CLI name is the whole decision: `orca` is the relay shim, `orca-ide` is local. */
+function launchCliNameFor(repo: Repo): string {
+  return buildWorktreeStartupForAgent({
+    repo,
+    settings,
+    agent: 'claude-agent-teams',
+    getLaunchPlatform: () => 'linux',
+    toSessionOptions: () => undefined
+  }).startup.command.split(' ')[0]!
+}
+
+describe('buildWorktreeStartupForAgent host resolution', () => {
+  // Why two hosts: one SSH fixture passes even when the launch shape is resolved off another
+  // host's row, which is the shape of the `ssh:m4air` -> openclaw leak.
+  it('drops the Linux-only rename for both spellings of SSH ownership on two hosts', () => {
+    expect(launchCliNameFor(makeRepo({ connectionId: 'm4air' }))).toBe('orca')
+    expect(launchCliNameFor(makeRepo({ executionHostId: 'ssh:openclaw' }))).toBe('orca')
   })
 
-  it('waits for the trust write before resolving', async () => {
+  it('keeps the Linux rename for a local row carrying a stale connection', () => {
+    expect(launchCliNameFor(makeRepo({ connectionId: 'm4air', executionHostId: 'local' }))).toBe(
+      'orca-ide'
+    )
+  })
+
+  it('drops the rename for a runtime host reaching a nested SSH target', () => {
+    expect(
+      launchCliNameFor(makeRepo({ connectionId: 'nested', executionHostId: 'runtime:vm-1' }))
+    ).toBe('orca')
+  })
+
+  it('keeps the rename for a runtime host with no nested SSH target', () => {
+    expect(launchCliNameFor(makeRepo({ executionHostId: 'runtime:vm-1' }))).toBe('orca-ide')
+  })
+})
+
+describe('buildWorktreeStartupForDraft agent detection', () => {
+  it('probes the SSH host named only by executionHostId instead of this client', async () => {
+    mocks.detectRemoteAgents.mockResolvedValueOnce(['claude'])
+    mocks.detectInstalledAgentsWithShellPathHydration.mockResolvedValue([])
+
+    const result = await buildWorktreeStartupForDraft({
+      repo: makeRepo({ executionHostId: 'ssh:openclaw' }),
+      settings,
+      draft: 'ship it',
+      getLaunchPlatform: () => 'linux'
+    })
+
+    expect(mocks.detectRemoteAgents).toHaveBeenCalledWith({ connectionId: 'openclaw' })
+    expect(mocks.detectInstalledAgentsWithShellPathHydration).not.toHaveBeenCalled()
+    expect(result?.agent).toBe('claude')
+  })
+
+  it('probes this client for a local row carrying a stale connection', async () => {
+    mocks.detectRemoteAgents.mockClear()
+    mocks.detectInstalledAgentsWithShellPathHydration.mockResolvedValueOnce(['claude'])
+
+    const result = await buildWorktreeStartupForDraft({
+      repo: makeRepo({ connectionId: 'm4air', executionHostId: 'local' }),
+      settings,
+      draft: 'ship it',
+      getLaunchPlatform: () => 'linux'
+    })
+
+    expect(mocks.detectRemoteAgents).not.toHaveBeenCalled()
+    expect(result?.agent).toBe('claude')
+  })
+})
+
+describe('markLocalWorktreeTrusted', () => {
+  it('waits for the Codex trust write before resolving', async () => {
     let finish!: () => void
-    mocks.applyLocalAgentTrustPreset.mockReturnValue(
+    mocks.markCodexProjectTrusted.mockReturnValue(
       new Promise<void>((resolve) => {
         finish = resolve
       })
@@ -30,24 +144,31 @@ describe('markLocalWorktreeTrusted', () => {
     expect(settled).toBe(false)
     finish()
     await marking
-    expect(mocks.applyLocalAgentTrustPreset).toHaveBeenCalledWith('codex', '/workspace/app')
+    expect(mocks.markCodexProjectTrusted).toHaveBeenCalledWith('/workspace/app')
   })
 
-  it('contains a rejected trust write', async () => {
-    mocks.applyLocalAgentTrustPreset.mockRejectedValueOnce(new Error('write failed'))
+  it('contains a rejected Codex trust write', async () => {
+    mocks.markCodexProjectTrusted.mockRejectedValueOnce(new Error('write failed'))
 
     await expect(markLocalWorktreeTrusted('codex', '/workspace/app')).resolves.toBeUndefined()
   })
 
-  it('resolves the claude preset so the Chat UI launch is not left at the trust dialog', async () => {
+  it('resolves the claude preset so a Chat UI launch is not left at the trust dialog', async () => {
+    mocks.markClaudeProjectTrusted.mockResolvedValueOnce(undefined)
+
     await markLocalWorktreeTrusted('claude', '/workspace/app')
 
-    expect(mocks.applyLocalAgentTrustPreset).toHaveBeenCalledWith('claude', '/workspace/app')
+    expect(mocks.markClaudeProjectTrusted).toHaveBeenCalledWith('/workspace/app')
   })
 
   it('skips agents with no preset', async () => {
+    // Why clear both: the preceding tests in this describe drive the codex arm.
+    mocks.markClaudeProjectTrusted.mockClear()
+    mocks.markCodexProjectTrusted.mockClear()
+
     await markLocalWorktreeTrusted('gemini', '/workspace/app')
 
-    expect(mocks.applyLocalAgentTrustPreset).not.toHaveBeenCalled()
+    expect(mocks.markClaudeProjectTrusted).not.toHaveBeenCalled()
+    expect(mocks.markCodexProjectTrusted).not.toHaveBeenCalled()
   })
 })

@@ -70,6 +70,7 @@ import {
 } from '../main/providers/agent-foreground-process'
 import {
   getStrictProcessTableSnapshot,
+  PROCESS_TABLE_SNAPSHOT_MAX_STALENESS_MS,
   type ProcessTableRow
 } from '../shared/process-table-snapshot'
 import type { ForegroundProcessEvidence } from '../shared/foreground-process-evidence'
@@ -190,6 +191,13 @@ type ManagedPty = {
   startupIngressIntent?: ReturnType<typeof parsePtyStartupIngressIntent>
   ownerBackend: PtyOwnerBackend
   agentSessionOwners?: AgentSessionOwnerBinding[]
+  /** Host clock, host-relative only: published as an age so no client has to trust our wall clock. */
+  createdAt: number
+  /** The authenticated consumer identity that asked this host to create this PTY, read from the
+   *  live grant rather than from a spawn parameter. Absent whenever the host could not attest one
+   *  (no consumer session, or a revive replaying state some other client serialized), and absence
+   *  must never be read as "nobody owns it". */
+  ownerClientInstanceId?: string
 }
 
 type RelayAgentSessionCreateResult = {
@@ -369,6 +377,14 @@ type PtyProcessSummary = {
   terminalHandle?: string
   foregroundProcessEvidence?: ForegroundProcessEvidence
   agentSessionOwners?: AgentSessionOwnerBinding[]
+  /** Age on the HOST's clock. Published instead of a creation timestamp so a client with a skewed
+   *  clock cannot compute a negative or enormous age and act on it. */
+  hostAgeMs?: number
+  /** True when this PTY was spawned for an Orca pane (`ORCA_PANE_KEY`). False means a bare relay
+   *  shell. Absent from a host that predates the field — which is neither. */
+  paneBound?: boolean
+  /** See {@link ManagedPty.ownerClientInstanceId}. Omitted when this host cannot attest one. */
+  ownerClientInstanceId?: string
 }
 
 type SerializedPtyEntry = {
@@ -456,6 +472,7 @@ export class PtyHandler {
   private consumerPausedOutputPtys = new Set<string>()
   private removeLegacyCapacityListener: (() => void) | null = null
   private sourcePublication: RelayPtySourcePublication | null = null
+  private consumerIdentityResolver: ((clientId: number) => string | null) | null = null
   private lastInputAtByPty = new Map<string, number>()
   private interactiveOutputCharsByPty = new Map<string, number>()
   private pendingSpawnCount = 0
@@ -508,6 +525,12 @@ export class PtyHandler {
 
   setSourcePublication(publication: RelayPtySourcePublication): void {
     this.sourcePublication = publication
+  }
+
+  /** Supplies the authenticated client identity behind a transport connection, so a spawn can be
+   *  attributed to the consumer session that requested it. */
+  setConsumerIdentityResolver(resolve: ((clientId: number) => string | null) | null): void {
+    this.consumerIdentityResolver = resolve
   }
 
   handleSourceCreditAvailable(id: string): void {
@@ -991,7 +1014,7 @@ export class PtyHandler {
   private registerHandlers(): void {
     this.dispatcher.onRequest('pty.spawn', (p, context) => this.spawn(p, context))
     this.dispatcher.onRequest('pty.attach', (p, context) => this.attach(p, context))
-    this.dispatcher.onRequest('pty.shutdown', (p) => this.shutdown(p))
+    this.dispatcher.onRequest('pty.shutdown', (p, context) => this.shutdown(p, context))
     this.dispatcher.onRequest('pty.sendSignal', (p) => this.sendSignal(p))
     this.dispatcher.onRequest('pty.getCwd', (p) => this.getCwd(p))
     this.dispatcher.onRequest('pty.getInitialCwd', (p) => this.getInitialCwd(p))
@@ -1871,11 +1894,15 @@ export class PtyHandler {
       params.startupIngressVersion === PTY_STARTUP_INGRESS_VERSION
         ? parsePtyStartupIngressIntent(params.startupIngress)
         : undefined
+    const ownerClientInstanceId =
+      context === undefined ? null : (this.consumerIdentityResolver?.(context.clientId) ?? null)
     const managed: ManagedPty = {
       id,
       incarnationId: randomUUID(),
       pty: term,
       initialCwd: cwd,
+      createdAt: Date.now(),
+      ...(ownerClientInstanceId ? { ownerClientInstanceId } : {}),
       buffered: new RecentPtyOutputBuffer({
         preserveChunkBoundaries: false,
         limit: REPLAY_BUFFER_MAX
@@ -1963,8 +1990,7 @@ export class PtyHandler {
     }
 
     // Why: verify liveness because shells can exit without node-pty onExit.
-    if (managed.pty.pid && !isProcessAlive(managed.pty.pid)) {
-      this.reapExitedPty(managed)
+    if (this.reapPtyProvenExited(managed)) {
       throw new Error(`PTY "${id}" not found`)
     }
 
@@ -2082,8 +2108,39 @@ export class PtyHandler {
     const cols = Math.max(1, Math.min(500, Math.floor(Number(params.cols) || 80)))
     const rows = Math.max(1, Math.min(500, Math.floor(Number(params.rows) || 24)))
     const managed = this.ptys.get(id)
-    if (managed && !managed.disposed) {
+    if (!managed || managed.disposed) {
+      return
+    }
+    // Why probe (same probe attach() and listProcesses() run): a shell that
+    // exited without node-pty's `onExit` leaves an undisposed entry behind, and
+    // while it stays the relay keeps advertising a dead shell and keeps holding
+    // `activePtyCount` above zero, which is what stops a relay with
+    // `relayGracePeriodSeconds: 0` from ever reaching its idle-no-ptys exit
+    // (#12423). This is retirement, not ioctl safety: only ESRCH from the host
+    // that owns the pid is evidence of `exited`.
+    if (this.reapPtyProvenExited(managed)) {
+      return
+    }
+    // The patched node-pty retires `_fd` in the same block that gives up the
+    // master (config/patches/node-pty@1.1.0.patch), which makes a resize past
+    // that point a no-op rather than a TIOCSWINSZ aimed at a reused descriptor.
+    // That covers only part of the window and does not cover this process at
+    // all: libuv closes the fd synchronously inside `uv_close`, before the JS
+    // `'close'` that runs `_close()`, and a relay host installs node-pty from
+    // npm, where the patch is not applied. So the catch below stays.
+    try {
       managed.pty.resize(cols, rows)
+    } catch (err) {
+      // A failed ioctl observed the handle, not the host's process table, so on
+      // its own it is `unverifiable`. Re-probe: a now-absent pid retires the
+      // entry, anything else keeps it and is contained here rather than
+      // escaping as a parse error on every later resize.
+      if (this.reapPtyProvenExited(managed)) {
+        return
+      }
+      process.stderr.write(
+        `[pty-handler] resize failed for PTY ${id} whose process is still live or unverifiable: ${err instanceof Error ? err.message : String(err)}\n`
+      )
     }
   }
 
@@ -2097,7 +2154,7 @@ export class PtyHandler {
     return { cols: managed.pty.cols, rows: managed.pty.rows }
   }
 
-  private async shutdown(params: Record<string, unknown>): Promise<void> {
+  private async shutdown(params: Record<string, unknown>, context?: RequestContext): Promise<void> {
     const id = params.id as string
     const immediate = params.immediate as boolean
     const expectedIncarnationId = params.expectedIncarnationId
@@ -2107,12 +2164,23 @@ export class PtyHandler {
     ) {
       throw new Error('Invalid expectedIncarnationId')
     }
+    const expectedOwnerClientInstanceId = params.expectedOwnerClientInstanceId
+    if (
+      expectedOwnerClientInstanceId !== undefined &&
+      (typeof expectedOwnerClientInstanceId !== 'string' ||
+        expectedOwnerClientInstanceId.length === 0)
+    ) {
+      throw new Error('Invalid expectedOwnerClientInstanceId')
+    }
     const managed = this.ptys.get(id)
     if (!managed) {
       return
     }
     if (expectedIncarnationId !== undefined && expectedIncarnationId !== managed.incarnationId) {
       throw new Error(`PTY incarnation mismatch for ${id}`)
+    }
+    if (expectedOwnerClientInstanceId !== undefined) {
+      this.assertShutdownOwnership(id, managed, expectedOwnerClientInstanceId, context)
     }
     // Why: `pty.shutdown` is the only authoritative statement this host ever gets that a tab is
     // gone. Record it before the kill request, because the kill is the part that can fail: an agent
@@ -2135,6 +2203,34 @@ export class PtyHandler {
     } else {
       this.releaseStartupCommand(managed)
       this.requestGracefulKill(managed, 'force-kill')
+    }
+  }
+
+  /** Re-decide, on the host, whether the caller may destroy this PTY.
+   *
+   *  `pty.shutdown` is irreversible and its siblings `pty.spawn`/`pty.attach` already take a
+   *  request context; without this the whole ownership rule lived on the client, on the one call
+   *  that cannot be taken back. Both halves are checked here because either alone is an echo: the
+   *  connection must still authenticate as that consumer identity (so a claim cannot be asserted),
+   *  and this host must have recorded that same identity as the PTY's creator at spawn (so the
+   *  caller cannot reach a PTY it never made).
+   *
+   *  Only callers that opt in are checked. An ordinary pane teardown does not pass the field, and
+   *  must not: a revived PTY carries no attested owner at all, and a host predating the attestation
+   *  would refuse stops it is obliged to honour. */
+  private assertShutdownOwnership(
+    id: string,
+    managed: ManagedPty,
+    expectedOwnerClientInstanceId: string,
+    context: RequestContext | undefined
+  ): void {
+    const requester =
+      context === undefined ? null : (this.consumerIdentityResolver?.(context.clientId) ?? null)
+    if (requester !== expectedOwnerClientInstanceId) {
+      throw new Error(`PTY "${id}" stop refused: requester is not the attested owner`)
+    }
+    if (managed.ownerClientInstanceId !== expectedOwnerClientInstanceId) {
+      throw new Error(`PTY "${id}" stop refused: this host attested no such owner`)
     }
   }
 
@@ -2183,9 +2279,7 @@ export class PtyHandler {
       if (this.ptys.get(managed.id) !== managed || managed.disposed) {
         return
       }
-      const pid = managed.pty.pid
-      if (pid && !isProcessAlive(pid)) {
-        this.reapExitedPty(managed)
+      if (this.reapPtyProvenExited(managed)) {
         return
       }
       if (attemptsRemaining <= 0) {
@@ -2212,17 +2306,74 @@ export class PtyHandler {
     managed.reapTimer = timer
   }
 
-  /** Retire every record for a PTY whose process is proven gone. Shared by the attach probe, the
-   *  listing probe and the post-shutdown sweep so the three cannot drift on what "gone" retires. */
-  private reapExitedPty(managed: ManagedPty): void {
+  /**
+   * Retire every record for a PTY whose process is proven gone. Shared by the attach probe, the
+   * listing probe and the post-shutdown sweep so the three cannot drift on what "gone" retires.
+   *
+   * `evidence` is not decoration: `exited` publishes a verdict to the client, and only ESRCH from
+   * the host that owns the pid earns it. The disposed-record sweep retires off our own
+   * bookkeeping, which says we tore the record down — not that the shell died — so it stays
+   * silent (docs/reference/ssh-execution-boundary.md).
+   */
+  private reapExitedPty(managed: ManagedPty, evidence: 'exited' | 'record-torn-down'): void {
     managed.physicalExit?.markExited()
     this.releaseRelayIngress(managed)
     this.flushPtyOutput(managed.id)
+    if (evidence === 'exited') {
+      this.publishReapedExit(managed)
+    }
     this.notifyExitListener(managed)
     this.agentSessionOwners.release(managed.id)
     disposeManagedPty(managed)
     this.removePty(managed.id)
     this.clearPtyFlowState(managed.id)
+  }
+
+  /**
+   * A reap is an exit the client has to hear about. `notifyExitListener` is
+   * relay-internal, so a retirement that stops there leaves the pane mounted
+   * against a session the relay has already forgotten — the next attach answers
+   * `PTY "<id>" not found` and nothing before it said why. `resize` made that
+   * user-triggered.
+   *
+   * `-1` is this wire's "gone, status unrecoverable": the pid is proven absent
+   * (ESRCH from the host that owns it) but nothing waited on the shell, so no
+   * status exists. `ssh-relay-session` already publishes the same code for a
+   * dropped lease. Reached only from the proven-exited path — a client that acts
+   * on this retires the pane, so nothing weaker than ESRCH may reach it.
+   */
+  private publishReapedExit(managed: ManagedPty): void {
+    // Why the guard: node-pty's own `onExit` already queued and published this
+    // pty's real exit code before reaching here, and the sweep also reaps
+    // entries that path left behind.
+    if (managed.exitListenerNotified || this.pendingExitByPty.has(managed.id)) {
+      return
+    }
+    this.pendingExitByPty.set(managed.id, {
+      id: managed.id,
+      code: -1,
+      incarnationId: managed.incarnationId
+    })
+    this.publishPendingExit(managed.id)
+  }
+
+  /**
+   * Retire this entry when the host proves its pid is gone; report whether it was.
+   *
+   * `managed.disposed` is bookkeeping, not liveness: it says we tore the record
+   * down, not that the shell died. A shell can exit without node-pty producing
+   * `onExit`, which leaves a non-disposed entry holding a handle whose master fd
+   * is already closed. Only `isProcessAlive` (ESRCH, from the host that owns the
+   * process) is positive evidence of absence; every other outcome is
+   * `unverifiable` and keeps its record and owner claim
+   * (docs/reference/ssh-execution-boundary.md).
+   */
+  private reapPtyProvenExited(managed: ManagedPty): boolean {
+    if (!managed.pty.pid || isProcessAlive(managed.pty.pid)) {
+      return false
+    }
+    this.reapExitedPty(managed, 'exited')
+    return true
   }
 
   private async sendSignal(params: Record<string, unknown>): Promise<void> {
@@ -2363,7 +2514,12 @@ export class PtyHandler {
     if (!managed || managed.disposed) {
       return false
     }
-    return await processHasChildren(managed.pty.pid)
+    // Fresh, not TTL-cached: this RPC exists to gate destructive decisions (the
+    // window-close confirmation, workspace cleanup's idle evidence), which act
+    // on the answer once. `pty.inspectProcess` below stays on the shared
+    // snapshot because it is the polled path, where a scan per pane per tick is
+    // the fork storm the cache removed.
+    return await processHasChildren(managed.pty.pid, { fresh: true })
   }
 
   private async getForegroundProcess(params: Record<string, unknown>): Promise<string | null> {
@@ -2406,9 +2562,15 @@ export class PtyHandler {
     let evidenceRows: readonly ProcessTableRow[] | null = null
     let evidenceResults: BatchedForegroundProcessResult[] = []
     const evidenceEpoch = ++this.foregroundEvidenceEpoch
+    // Worst-case capture time for the snapshot below, not the instant its await settled: the
+    // reader may serve a TTL-cached table, so the observation can already be one window old. The
+    // loop that follows can await per entry, so each record is stamped against this rather than
+    // carrying a shared constant.
+    let evidenceCapturedAtMs = Date.now()
     if (process.platform !== 'win32' && managedEntries.length > 0) {
       try {
         evidenceRows = await getStrictProcessTableSnapshot()
+        evidenceCapturedAtMs = Date.now() - PROCESS_TABLE_SNAPSHOT_MAX_STALENESS_MS
         evidenceResults = await resolveAgentForegroundProcessesBatch(
           managedEntries.map(([, managed]) => ({
             rootPid: managed.pty.pid,
@@ -2422,8 +2584,11 @@ export class PtyHandler {
       }
     }
     for (const [entryIndex, [id, managed]] of managedEntries.entries()) {
-      if (managed.disposed || (managed.pty.pid && !isProcessAlive(managed.pty.pid))) {
-        this.reapExitedPty(managed)
+      if (managed.disposed) {
+        this.reapExitedPty(managed, 'record-torn-down')
+        continue
+      }
+      if (this.reapPtyProvenExited(managed)) {
         continue
       }
       // Reuse batched correlation; per-PTY tree scans recreate O(PTY × rows) work.
@@ -2442,7 +2607,7 @@ export class PtyHandler {
               {
                 authorityGeneration: this.ptyIdMintEpoch,
                 observationEpoch: evidenceEpoch,
-                capturedAgeMs: 0
+                capturedAgeMs: Math.max(0, Date.now() - evidenceCapturedAtMs)
               }
             )
           : undefined
@@ -2451,6 +2616,11 @@ export class PtyHandler {
         incarnationId: managed.incarnationId,
         cwd: managed.initialCwd,
         title,
+        hostAgeMs: Math.max(0, Date.now() - managed.createdAt),
+        paneBound: Boolean(managed.paneKey ?? managed.attachIdentity?.paneKey),
+        ...(managed.ownerClientInstanceId
+          ? { ownerClientInstanceId: managed.ownerClientInstanceId }
+          : {}),
         ...(managed.worktreeId ? { worktreeId: managed.worktreeId } : {}),
         ...(managed.terminalHandle ? { terminalHandle: managed.terminalHandle } : {}),
         ...(foregroundProcessEvidence ? { foregroundProcessEvidence } : {}),
@@ -2624,6 +2794,10 @@ export class PtyHandler {
       incarnationId: randomUUID(),
       pty: term,
       initialCwd: entry.cwd,
+      createdAt: Date.now(),
+      // Deliberately no ownerClientInstanceId: revive replays state a client serialized, which is
+      // not this host observing who asked for the shell. Unattested means never swept.
+
       buffered: new RecentPtyOutputBuffer({
         preserveChunkBoundaries: false,
         limit: REPLAY_BUFFER_MAX

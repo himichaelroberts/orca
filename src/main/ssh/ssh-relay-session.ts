@@ -5,11 +5,13 @@ import { randomUUID } from 'node:crypto'
 import type { BrowserWindow } from 'electron'
 import { deployAndLaunchRelay } from './ssh-relay-deploy'
 import { execCommand } from './ssh-relay-deploy-helpers'
+import { writeStringsViaSftp } from './sftp-upload'
 import { isRelayVersionMismatchError } from './ssh-relay-version-mismatch-error'
 import { isRelayEndpointHeldError } from './ssh-relay-endpoint-incumbent'
 import { forgetRelayNodePtyRepairs, recoverRelayNodePtyForSpawn } from './ssh-relay-node-pty-repair'
 import type { TerminalUnavailableCause } from '../../shared/terminal-unavailable-cause'
 import { replayPendingSshPtyKills } from './ssh-pending-pty-kill-replay'
+import { sweepOrphanedRelayPtys } from './ssh-orphan-relay-pty-sweep'
 import { SshChannelMultiplexer } from './ssh-channel-multiplexer'
 import { SshPtyProvider } from '../providers/ssh-pty-provider'
 import type { SshPtyAttachResult } from '../providers/ssh-pty-session-reattach'
@@ -1413,20 +1415,7 @@ export class SshRelaySession {
         await conn.writeFile(file.path, file.contents, { hostPlatform })
       }
     } else {
-      const sftp = await conn.sftp()
-      try {
-        for (const file of plan.files) {
-          await new Promise<void>((resolve, reject) => {
-            const ws = sftp.createWriteStream(file.path)
-            sftp.once('error', reject)
-            ws.once('close', resolve)
-            ws.once('error', reject)
-            ws.end(file.contents)
-          })
-        }
-      } finally {
-        sftp.end()
-      }
+      await writeStringsViaSftp(conn, plan.files)
     }
     for (const command of plan.postWriteCommands) {
       await execCommand(conn, command, { wrapCommand: !isWindowsRemoteHost(hostPlatform) })
@@ -2398,6 +2387,17 @@ export class SshRelaySession {
         Array.from(attachedLeaseIds)
       )
     }
+    // Why last: reclaiming comes first, so every PTY this connect could route to is routed before
+    // anything asks which ones are unreachable (#9819).
+    await sweepOrphanedRelayPtys({
+      targetId: this.targetId,
+      store: this.store,
+      provider: ptyProvider,
+      clientInstanceId: this.ptyConsumerClientInstanceId,
+      isSessionOwner: this.activePtyConsumerOwner() !== null,
+      routedPtyIds: ptyIds,
+      shouldContinue
+    })
   }
 
   private async reattachKnownPty(args: {

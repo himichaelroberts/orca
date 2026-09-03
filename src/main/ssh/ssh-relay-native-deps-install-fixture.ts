@@ -15,6 +15,9 @@ export type SftpWriteCapture = {
 
 type SftpCallback = (err: Error | null, resolved?: string) => void
 const NO_SUCH_SFTP_FILE = Object.assign(new Error('No such file'), { code: 2 })
+// Stdout of the relay-side pty-master cloexec patch; kept as a literal so the fixture states the
+// wire token it is standing in for rather than importing the module under test.
+const NODE_PTY_CLOEXEC_STATUS_PREFIX = 'ORCA-NPTY-CLOEXEC:'
 
 export function makeMockConnection(capture: SftpWriteCapture): SshConnection {
   // Why: production attaches/removes real listeners (including prependOnceListener), so the fake must be an emitter.
@@ -69,7 +72,9 @@ export function makeStagedFirstInstallExecPrefix(): ExecResponse[] {
     `__ORCA_UPLOAD_STAGE_SLOT__${STAGE_OWNER}:slot-0`,
     '', // chmod staged node
     '', // final install namespace marker
-    `__ORCA_UPLOAD_STAGE_PROMOTION__${STAGE_OWNER}:PROMOTED`
+    `__ORCA_UPLOAD_STAGE_PROMOTION__${STAGE_OWNER}:PROMOTED`,
+    // Shared native-deps cache probe; an empty answer is a miss, so the per-directory install runs.
+    ''
   ]
 }
 
@@ -172,8 +177,10 @@ export function makeExecResponses(opts: {
   ]
   // Cleanup execs only run when the probe resolved (not when it rejected).
   const probeResolved = typeof probeSlot === 'string'
+  let loadable = false
   if (probeResolved) {
     const probeOk = probeSlot.includes('ORCA-NPTY-PROBE-OK')
+    loadable = probeOk
     if (!probeOk) {
       slots.push('') // cat stderr (graceful failure path captures detail)
     }
@@ -183,11 +190,19 @@ export function makeExecResponses(opts: {
       slots.push('') // chmod prebuilds after rebuild
       const repairProbe = opts.repairProbe === 'ok' ? 'ORCA-NPTY-PROBE-OK\n' : 'MISSING\n'
       slots.push(repairProbe)
-      if (!repairProbe.includes('ORCA-NPTY-PROBE-OK')) {
+      loadable = repairProbe.includes('ORCA-NPTY-PROBE-OK')
+      if (!loadable) {
         slots.push('') // cat stderr after unsuccessful rebuild
       }
       slots.push('') // rm -f stderr after rebuild probe
     }
+  }
+  // Publication is gated on the probe: only a tree this host actually loaded is shared.
+  if (loadable) {
+    // The cloexec patch runs first, and publication is gated on its status, so `patched` is what
+    // makes the promote exec below reachable at all.
+    slots.push(`${NODE_PTY_CLOEXEC_STATUS_PREFIX}patched\n`)
+    slots.push('') // promote the private tree into the shared native-deps cache
   }
   slots.push('', 'DEAD', '', 'READY') // clean stage root, launch, credential, readiness
   return slots
